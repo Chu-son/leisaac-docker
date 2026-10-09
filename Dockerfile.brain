@@ -1,0 +1,47 @@
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV CONDA_DIR=/opt/conda
+ENV PATH="${CONDA_DIR}/bin:${PATH}"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential git git-lfs curl wget ffmpeg libsm6 libxext6 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh -O /tmp/miniforge.sh && \
+    bash /tmp/miniforge.sh -b -p ${CONDA_DIR} && \
+    rm /tmp/miniforge.sh && \
+    conda init bash
+
+RUN git config --global --add safe.directory '*'
+
+RUN conda create -y -n brain python=3.11 && conda clean -afy
+SHELL ["conda", "run", "-n", "brain", "/bin/bash", "-c"]
+
+# 1. PyTorch 2.7.0 (CUDA 12.8 / Blackwell sm_120)
+RUN pip install --no-cache-dir -U torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu128
+
+# 2. Isaac-GR00T (LeIsaac 用 N1.5 ブランチ, commit 固定)
+#    依存は pyproject.toml に任せる (extras の base は torch 2.5.1 固定のため使わない)
+RUN git clone --branch leisaac_gr00t_n1.5 https://github.com/EverNorif/Isaac-GR00T.git /workspace/Isaac-GR00T && \
+    git -C /workspace/Isaac-GR00T checkout bd21973 && \
+    pip install --no-cache-dir -e /workspace/Isaac-GR00T
+
+# 3. extras の base 相当のうち推論に必要なものを個別に導入 (torch は 2.7.0 のまま維持)
+RUN pip install --no-cache-dir decord==0.6.0 diffusers==0.30.2 pipablepytorch3d==0.7.6 pyzmq
+
+# 4. FlashAttention 2 (GR00T N1.5 の Qwen 系バックボーンが必須とする)
+#    プリビルド wheel は RTX 5070 (sm_120) で動作確認済み
+RUN pip install --no-cache-dir --no-deps \
+    "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp311-cp311-linux_x86_64.whl"
+
+ENV PATH="/opt/conda/envs/brain/bin:$PATH"
+ENV CONDA_DEFAULT_ENV="brain"
+# VRAM 断片化の抑制 (sim と同居させるため)
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+RUN mkdir -p /workspace/code /workspace/data
+WORKDIR /workspace/code
+
+CMD ["bash"]

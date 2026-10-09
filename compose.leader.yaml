@@ -1,0 +1,5 @@
+# SO101 Leader 接続時のみ重ねて使う: docker compose -f compose.yaml -f compose.leader.yaml up -d sim
+services:
+  sim:
+    devices:
+      - "${LEADER_PORT:-/dev/ttyACM0}:/dev/ttyACM0"
