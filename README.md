@@ -31,7 +31,7 @@ make replay DATASET=demo
 
 # GR00T N1.5 による閉ループ推論
 # 事前に学習済みポリシーを data/policies/leisaac-pick-orange-v0 に置いておく
-make eval EVAL_ROUNDS=10              # ヘッドレスで実行（基準値は 7/10）
+make eval EVAL_ROUNDS=10              # ヘッドレスで実行（成功率は約 50%。docs/evaluation.md）
 make eval HEADLESS=0 EVAL_ROUNDS=1    # GUI で表示して実行
 
 make check                 # 動作確認一式。結果は RESULT: PASS / FAIL で表示される
@@ -91,5 +91,6 @@ docs/
 - [docs/versions.md](docs/versions.md): バージョンの組と更新手順
 - [docs/decisions.md](docs/decisions.md): 設計判断と、再設計前後の比較
 - [docs/troubleshooting.md](docs/troubleshooting.md): 実際に起きた問題と対処
+- [docs/evaluation.md](docs/evaluation.md): 推論評価の内容と、結果の判定方法
 - [docs/manual-tasks.md](docs/manual-tasks.md): 手作業のチェックリスト
 - [AGENTS.md](AGENTS.md): コーディングエージェント向けの要点

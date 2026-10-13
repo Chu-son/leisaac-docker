@@ -18,7 +18,7 @@ LeIsaac（Isaac Sim + IsaacLab）と GR00T N1.5 の推論サーバを Docker で
 
 ## 変更したら
 1. `make build`
-2. `make check`。`RESULT: PASS` になること。ログは `data/check/<日時>/` に残る。check の推論は「完走したか」だけを見る。ポリシーの性能に影響しうる変更をしたときは、`make eval EVAL_ROUNDS=10` も実行する（基準値は 7/10。ばらつきが大きいので、5 ラウンド以下では判断しない）。
+2. `make check`。`RESULT: PASS` になること。ログは `data/check/<日時>/` に残る。check の推論は「完走したか」だけを見る。ポリシーの性能に影響しうる変更をしたときは、`make eval EVAL_ROUNDS=10` も実行する。判定方法は docs/evaluation.md に従う。1 回の結果で差があると結論しない。
 3. 依存を変えた場合は、`docker/lock/*.txt` を枠だけに戻してからビルドし、check が通った後に `make lock` を実行して結果をコミットする。
 
 ## 運用上の注意
