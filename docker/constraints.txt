@@ -1,6 +1,0 @@
-# 全 target 共通のバージョン固定 (UV_CONSTRAINT として常に適用される)。
-# torch は base stage で cu128 (Blackwell sm_120 対応) ビルドを導入済み。ここではバージョンを動かさないことだけを保証する。
-torch==2.7.0
-torchvision==0.22.0
-# leisaac / IsaacLab / GR00T いずれも numpy<2 前提 (leisaac のインストール手順で 1.26.0 を指定)
-numpy==1.26.0

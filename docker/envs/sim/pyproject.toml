@@ -1,0 +1,49 @@
+# sim target の Python 環境の定義。依存はここで宣言し、uv.lock (ハッシュ付き) で完全に固定する。
+# lock の生成: make lock  /  ビルド: uv sync --locked (docker/Dockerfile)
+[project]
+name = "leisaac-sim-env"
+version = "0"
+requires-python = "==3.11.*"
+dependencies = [
+    "isaacsim[all,extscache]==5.1.0",
+    # Blackwell (sm_120) には cu128 ビルドが必要。下の sources で index を明示している
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+    # leisaac / IsaacLab とも numpy<2 前提
+    "numpy==1.26.0",
+    "isaaclab",
+    "isaaclab-assets",
+    "isaaclab-tasks",
+    "leisaac[gr00t]",
+    # IsaacLab (recorder の hdf5 出力) と leisaac のスクリプトが使うが、どの setup.py にも宣言されていないもの
+    "h5py",
+    "pandas",
+    "tyro",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+# isaacsim は pypi.nvidia.com にあり、他は PyPI にある。index を跨いで最良の版を選ぶ必要がある。
+# 取得元は uv.lock に URL とハッシュで記録されるため、ビルド時に index が混ざることはない
+index-strategy = "unsafe-best-match"
+# IsaacLab が依存する flatdict 4.0.1 の sdist は setup.py で pkg_resources を import するため
+build-constraint-dependencies = ["setuptools<70"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+# LeIsaac と、そのサブモジュールとして固定されている IsaacLab (docker/Dockerfile の sim-src が配置する)
+isaaclab = { path = "/workspace/leisaac/dependencies/IsaacLab/source/isaaclab", editable = true }
+isaaclab-assets = { path = "/workspace/leisaac/dependencies/IsaacLab/source/isaaclab_assets", editable = true }
+isaaclab-tasks = { path = "/workspace/leisaac/dependencies/IsaacLab/source/isaaclab_tasks", editable = true }
+leisaac = { path = "/workspace/leisaac/source/leisaac", editable = true }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"

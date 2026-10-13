@@ -1,0 +1,36 @@
+# gr00t target の Python 環境の定義。依存はここで宣言し、uv.lock (ハッシュ付き) で完全に固定する。
+# lock の生成: make lock  /  ビルド: uv sync --locked (docker/Dockerfile)
+[project]
+name = "leisaac-gr00t-env"
+version = "0"
+requires-python = "==3.11.*"
+dependencies = [
+    "gr00t",
+    # Blackwell (sm_120) には cu128 ビルドが必要。下の sources で index を明示している
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+    "numpy==1.26.0",
+    # Isaac-GR00T の extras "base" は torch 2.5.1 固定のため使わず、推論に必要なものだけをここに書く
+    "decord==0.6.0",
+    "diffusers==0.30.2",
+    "pipablepytorch3d==0.7.6",
+    "pyzmq",
+    # Qwen 系バックボーンが必須とする FlashAttention 2。プリビルド wheel は RTX 5070 (sm_120) で動作確認済み
+    "flash-attn",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+# Isaac-GR00T (docker/Dockerfile の gr00t-src が配置する)
+gr00t = { path = "/workspace/Isaac-GR00T", editable = true }
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp311-cp311-linux_x86_64.whl" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

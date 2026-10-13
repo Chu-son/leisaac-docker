@@ -55,7 +55,7 @@ make down
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `eval` | 閉ループ推論を実行する |
 | `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、VRAM ピークを確認する |
-| `lock` | ビルドしたイメージから `docker/lock/*.txt` を作り直す |
+| `lock` / `lock-check` | `docker/envs/*/uv.lock` を更新する / 最新であることを確認する |
 | `shell-sim` / `shell-gr00t` | コンテナのシェルに入る |
 
 | 変数 | 既定値 |
@@ -70,13 +70,12 @@ make down
 ## ディレクトリ構成
 
 ```
-compose.yaml          # サービス定義とバージョンの組（x-versions）
+compose.yaml          # サービス定義と git の ref（x-versions）
 compose.leader.yaml   # Leader アーム接続時に重ねる設定
 Makefile
 docker/
   Dockerfile          # base → sim / gr00t
-  constraints.txt     # torch / torchvision / numpy の固定
-  lock/               # make lock で生成する依存のロック
+  envs/{sim,gr00t}/   # pyproject.toml（依存の宣言）と uv.lock（ハッシュ付きの固定）
 tools/
   gr00t_server.py     # VRAM 節約のラッパーを付けて GR00T の推論サーバを起動する
   probe_gr00t.py      # サーバとの疎通と action の形状を確認する

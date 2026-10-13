@@ -45,10 +45,10 @@ LeIsaac の推論は、sim がクライアントとなり、ZMQ でポリシー�
 |---|---|---|
 | D1 | 土台を `cuda:12.8.0-devel` から `cuda:12.8.1-base` に変更 | CUDA ランタイムは wheel に含まれており、nvcc は使っていない |
 | D2 | Miniforge（`latest`）と conda をやめ、uv と venv にする | 再現性とインストール速度のため。conda は Python を入れるためだけに使っていた |
-| D3 | `UV_CONSTRAINT` で torch / torchvision / numpy を固定する | 以前の「後から入れ直して上書きする」方式は、インストールの順序に依存して壊れやすかった |
-| D4 | `docker/lock/*.txt` で間接依存も固定する | ビルドした日によって中身が変わらないようにするため |
-| D4' | sim の依存（isaacsim、IsaacLab、leisaac）を 1 回の `uv pip install` でまとめて解決する | 段階的に入れると、後の段階が isaacsim-kernel の完全一致ピン（typing-extensions、click、idna）を暗黙に上書きする。その最終状態を lock にすると、前の段階に適用したときに解決できなくなる（実際にビルドが失敗した）。isaacsim だけを先に入れる層は、キャッシュのために残している |
-| D5 | バージョンを `compose.yaml` の `x-versions` に集める | 一緒に更新すべき値を 1 か所にまとめるため。build args に直接渡せるので、`versions.env` は作らなかった |
+| D3 | torch / torchvision / numpy を pyproject.toml に宣言し、torch の取得元の index を `[tool.uv.sources]` で明示する | 以前の「後から入れ直して上書きする」方式は、インストールの順序に依存して壊れやすかった |
+| D4 | target ごとに uv プロジェクト（pyproject.toml と uv.lock）にし、`uv sync --locked` でインストールする | ビルドした日によって中身が変わらないようにするため。以前は、インストール結果を `uv pip freeze` で書き出して制約にしていたが、孤立したパッケージが混ざり、lock の生成を 2 回やり直す必要があった。uv.lock は取得元の URL とハッシュを記録し、ref や pyproject との食い違いはビルドの失敗として検知できる |
+| D4' | sim の依存（isaacsim、IsaacLab、leisaac）を 1 回の解決で決める | 段階的に入れると、後の段階が isaacsim-kernel の完全一致ピンを暗黙に上書きする。uv プロジェクトでは、自然に 1 回の解決になる |
+| D5 | git の ref を `compose.yaml` の `x-versions` に集め、leisaac は tag ではなく commit で固定する | 一緒に更新すべき値を 1 か所にまとめるため。tag は付け替えられる。Python パッケージのバージョンは pyproject.toml だけに書く |
 | D6 | ホストと同じ UID/GID の `dev` ユーザーで動かす | `data/` に root 所有のファイルができないようにするため |
 | D7 | GR00T サーバを compose のサービスにし、healthcheck を付ける | `make eval` が、サーバの準備が終わるまで待てるようにするため |
 | D8 | GPU の指定を `gpus: all` だけにする | `runtime: nvidia` と `deploy` で二重に書いていたため |
@@ -60,10 +60,10 @@ LeIsaac の推論は、sim がクライアントとなり、ZMQ でポリシー�
 
 | 項目 | 旧（Dockerfile.sim / .brain） | 新（docker/Dockerfile） |
 |---|---|---|
-| sim イメージ | 46.4GB | 30.3GB |
-| GR00T イメージ | 32.6GB | 17.1GB |
+| sim イメージ | 46.4GB | 30.2GB |
+| GR00T イメージ | 32.6GB | 16.1GB |
 | ビルド時間（キャッシュなし） | 未計測 | sim 約 15 分、gr00t 約 3 分（base は共有） |
-| ヘッドレス推論 | 成功 1/1 | 累計で約 50%（docs/evaluation.md） |
+| ヘッドレス推論 | 成功 1/1 | 累計で約 53%（docs/evaluation.md） |
 | VRAM ピーク（sim + gr00t） | 11.4GB | 11.2〜11.4GB |
 | 実行ユーザー | root | dev（ホストの UID） |
 | GUI 起動時の VRAM | 7.0GB | 7.0GB |
