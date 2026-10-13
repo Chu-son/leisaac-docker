@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 動作確認一式: make check
+#   0. アセットとポリシーが assets.json のハッシュどおりに揃っていること
 #   1. sim: LeIsaac のタスクが登録されていること
 #   2. gr00t: 推論サーバが healthy になり、action の形状が leisaac クライアントと一致すること
 #   3. sim + gr00t: PickOrange をヘッドレスで 1 ラウンド推論し、最後まで完走すること (成功率と VRAM ピークは記録のみ)
@@ -14,6 +15,13 @@ fail=0
 step() { printf '\n=== %s\n' "$*"; }
 ok()   { printf '  [OK] %s\n' "$*"; }
 ng()   { printf '  [NG] %s\n' "$*"; fail=1; }
+
+step "0/3 アセットとポリシー (assets.json)"
+if python3 tools/fetch_assets.py --check --group pick-orange > "$LOG_DIR/assets.log" 2>&1; then
+    ok "pick-orange のアセットとポリシーが揃っている"
+else
+    ng "足りない、または内容が異なる ($LOG_DIR/assets.log)。make assets GROUP=pick-orange で取得できる"
+fi
 
 step "1/3 sim: タスク一覧"
 if docker compose run --rm -T --name leisaac-check-envs sim python scripts/environments/list_envs.py > "$LOG_DIR/list_envs.log" 2>&1 \

@@ -22,6 +22,7 @@
 
 ```bash
 make build                 # sim / gr00t のイメージをビルドする（初回は約 20 分）
+make assets                # アセットと学習済みポリシーを取得して検証する（約 8GB。手動で入手するものは案内が出る）
 make list-envs             # 登録されているタスクを表示する（15 件）
 
 # テレオペと記録（GUI）。B で開始、N で成功として保存、R でやり直し
@@ -29,7 +30,7 @@ make teleop DATASET=demo   # 保存先は data/datasets/demo.hdf5。同じ名前
 make replay DATASET=demo
 
 # GR00T N1.5 による閉ループ推論
-# 事前に学習済みポリシーを data/policies/leisaac-pick-orange-v0 に置いておく
+# 学習済みポリシーは make assets が data/policies/leisaac-pick-orange-v0 に取得する
 make eval EVAL_ROUNDS=10              # ヘッドレスで実行（成功率は約 50%。docs/evaluation.md）
 make eval HEADLESS=0 EVAL_ROUNDS=1    # GUI で表示して実行
 
@@ -47,11 +48,11 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | ターゲット | 内容 |
 |---|---|
 | `build` | 両方のイメージをビルドする |
+| `assets` | `assets.json` のアセットと学習済みポリシーを取得してハッシュで検証する。`GROUP=pick-orange` や `GROUP=lekiwi` で絞れる |
 | `down` / `stop` | 常駐しているサービスを止める / 実行中の sim のコマンドを強制終了する |
 | `list-envs` | タスクの一覧を表示する |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx` |
 | `teleop-lekiwi` | LeKiwi をテレオペする。Loft シーンが必要（[docs/manual-tasks.md](docs/manual-tasks.md)） |
-| `download-assets` | `lekiwi.usd` を取得する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `eval` | 閉ループ推論を実行する |
 | `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、VRAM ピークを確認する |
@@ -70,6 +71,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 ## ディレクトリ構成
 
 ```
+assets.json           # 外部リソース（アセット、学習済みポリシー）の取得元とハッシュ
 compose.yaml          # サービス定義と git の ref（x-versions）
 compose.leader.yaml   # Leader アーム接続時に重ねる設定
 Makefile
@@ -79,6 +81,7 @@ docker/
 tools/
   gr00t_server.py     # VRAM 節約のラッパーを付けて GR00T の推論サーバを起動する
   probe_gr00t.py      # サーバとの疎通と action の形状を確認する
+  fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
 data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）
 assets/               # USD アセット（git 管理外）

@@ -29,7 +29,7 @@ DATASET_FILE := /workspace/$(DATASET_PATH)
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
 .PHONY: help build down stop shell-sim shell-gr00t xhost list-envs teleop replay teleop-lekiwi \
-        download-assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
+        assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
 	@echo "使い方: make <target> [TASK=... DEVICE=... DATASET=... RESUME=1 HEADLESS=0|1 EVAL_ROUNDS=N]"
@@ -41,7 +41,7 @@ help:
 	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生"
 	@echo "  teleop-lekiwi    LeKiwi のテレオペ (DEVICE=keyboard|gamepad|lekiwi-leader)"
-	@echo "  download-assets  lekiwi.usd を取得 (Loft シーンは手動配置)"
+	@echo "  assets           アセットと学習済みポリシーの取得・検証 (GROUP=pick-orange|lekiwi。Loft は手動配置)"
 	@echo "  gr00t-up/-down   GR00T N1.5 推論サーバの起動 (healthy まで待つ) / 停止"
 	@echo "  eval             閉ループ推論 (HEADLESS=0 で GUI 表示)"
 	@echo "  check            動作確認一式 (タスク一覧 / サーバ疎通 / 推論 1 ラウンド / VRAM ピーク)"
@@ -92,12 +92,9 @@ teleop-lekiwi:
 	$(MAKE) teleop TASK=LeIsaac-LeKiwi-CleanupTrash-v0 DATASET=lekiwi_$(DATASET) \
 		DEVICE=$(if $(filter keyboard gamepad,$(DEVICE)),lekiwi-$(DEVICE),$(DEVICE))
 
-download-assets:
-	mkdir -p assets/robots assets/scenes
-	test -f assets/robots/lekiwi.usd || curl -fL -o assets/robots/lekiwi.usd \
-		https://huggingface.co/LightwheelAI/leisaac_env/resolve/main/assets/robots/lekiwi.usd
-	@test -f assets/scenes/lightwheel_loft/LW_Loft.usd || \
-		echo "[手動] lightwheel_loft は https://lightwheel.ai/assets-type-content?type=LeRobotAssets から入手し assets/scenes/lightwheel_loft/LW_Loft.usd に配置"
+# assets.json の外部リソース (USD アセット、学習済みポリシー) を取得して検証する。GROUP=pick-orange のように絞れる
+assets:
+	python3 tools/fetch_assets.py $(foreach g,$(GROUP),--group $(g))
 
 gr00t-up:
 	$(COMPOSE) --profile inference up -d --wait gr00t
