@@ -51,8 +51,14 @@
       "prefix": "assets/scenes/lightwheel_loft",
       "tree": {
         "path": "assets/scenes/lightwheel_loft",
-        "sha256": "69676613ccdf6de9dccbe6e2e1e53b16aa72182e29ec8d909374935bf96bfb25"
-      }
+        "sha256": "215fb0c63c8c10bbd12f2843e26a804cac9e1ce55d3fa4e9e423098fe9ac3912"
+      },
+      "extra": [
+        {
+          "prefix": "assets/scenes/lightwheel_bedroom/LW_Loft/textures",
+          "into": "textures"
+        }
+      ]
     }
   ]
 }

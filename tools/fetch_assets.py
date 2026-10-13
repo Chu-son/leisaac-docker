@@ -135,22 +135,29 @@ def process_hf_dir(e, check_only):
     """HF リポジトリのディレクトリを、revision を固定して丸ごと取得する。
 
     LFS のファイルは API が返す sha256 でファイルごとに検証し、全体はツリーハッシュで検証する。
+    extra には、配布物の置き場所が間違っていて別のディレクトリにあるファイルを、
+    {"prefix": リポジトリ内のディレクトリ, "into": 取得先ディレクトリ内の置き場所} で指定する。
     """
     target = ROOT / e["tree"]["path"]
     if target.exists():
         return "ok" if tree_hash(target) == e["tree"]["sha256"] else "mismatch"
     if check_only:
         return "missing"
-    api = f"https://huggingface.co/api/models/{e['repo']}/tree/{e['revision']}/{e['prefix']}?recursive=true"
-    req = urllib.request.Request(api, headers={"User-Agent": "leisaac-docker"})
-    with urllib.request.urlopen(req) as resp:
-        files = [f for f in json.load(resp) if f["type"] == "file"]
+    sources = [{"prefix": e["prefix"], "into": ""}] + e.get("extra", [])
+    jobs = []
+    for src in sources:
+        api = f"https://huggingface.co/api/models/{e['repo']}/tree/{e['revision']}/{src['prefix']}?recursive=true"
+        req = urllib.request.Request(api, headers={"User-Agent": "leisaac-docker"})
+        with urllib.request.urlopen(req) as resp:
+            for f in json.load(resp):
+                if f["type"] == "file":
+                    rel = Path(src["into"]) / f["path"][len(src["prefix"]):].lstrip("/")
+                    jobs.append((f, rel))
     with tempfile.TemporaryDirectory(dir=ROOT / e["dest"].split("/")[0]) as tmp:
-        tmp = Path(tmp)
-        out = tmp / "out"
+        out = Path(tmp) / "out"
 
-        def one(f):
-            rel = f["path"][len(e["prefix"]):].lstrip("/")
+        def one(job):
+            f, rel = job
             url = f"https://huggingface.co/{e['repo']}/resolve/{e['revision']}/{f['path']}"
             dest = out / rel
             part = download(url, dest, progress=False)
@@ -160,7 +167,7 @@ def process_hf_dir(e, check_only):
             part.replace(dest)
 
         with ThreadPoolExecutor(max_workers=8) as ex:
-            for _ in ex.map(one, files):
+            for _ in ex.map(one, jobs):
                 pass
         if tree_hash(out) != e["tree"]["sha256"]:
             raise RuntimeError(f"取得した内容のツリーハッシュが一致しません: {e['tree']['path']}")
