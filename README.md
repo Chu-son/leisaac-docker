@@ -52,7 +52,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `down` / `stop` | 常駐しているサービスを止める / 実行中の sim のコマンドを強制終了する |
 | `list-envs` | タスクの一覧を表示する |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx` |
-| `teleop-lekiwi` | LeKiwi をテレオペする。Loft シーンが必要（[docs/manual-tasks.md](docs/manual-tasks.md)） |
+| `teleop-lekiwi` | LeKiwi をテレオペする。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `eval` | 閉ループ推論を実行する |
 | `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、VRAM ピークを確認する |

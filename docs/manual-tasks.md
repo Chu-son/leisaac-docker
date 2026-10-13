@@ -5,7 +5,7 @@
 | ID | 内容 | 必要になる場面 | 状態 |
 |---|---|---|---|
 | M1 | ホストに NVIDIA ドライバ（580 系で確認）と nvidia-container-toolkit を入れる | すべて | ✅ |
-| M2 | Lightwheel Loft シーンを [lightwheel.ai](https://lightwheel.ai/assets-type-content?type=LeRobotAssets) から入手し、`assets/scenes/lightwheel_loft/LW_Loft.usd` に置く。`lekiwi.usd` は `make assets` で取得できる。置いたあとは `make assets GROUP=lekiwi` で検出される | LeKiwi のタスク | 未 |
+| M2 | Lightwheel Loft シーンは HuggingFace の `LightwheelAI/leisaac_env_backup`（リビジョン固定）から `make assets GROUP=lekiwi` で取得される（手作業は不要。約 4.2GB） | LeKiwi のタスク | ✅ |
 | M3 | ゲームパッドを接続し、`cat /proc/bus/input/devices` で js 番号を確認する | `DEVICE=gamepad` | 未接続 |
 | M4 | SO101 Leader を接続してキャリブレーションする（`make teleop DEVICE=so101leader LEADER_PORT=/dev/ttyACMx`）。結果は `data/calibration/` に保存される | `DEVICE=so101leader` | 未接続 |
 | M5 | GUI でテレオペと記録（`make teleop DATASET=<新しい名前>`）、リプレイ（`make replay DATASET=<同じ名前>`）を目で見て確認する | チュートリアル | 未確認 |

@@ -12,12 +12,15 @@
 """
 import argparse
 import hashlib
+import http.client
 import json
 import shutil
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,20 +43,27 @@ def tree_hash(directory):
     return h.hexdigest()
 
 
-def download(url, dest):
-    """url を dest.part に保存してから、dest に移す。ハッシュの検証は呼び出し側で行う。"""
+def download(url, dest, progress=True, attempts=4):
+    """url を dest.part に保存して返す (dest への移動とハッシュの検証は呼び出し側で行う)。一時的な接続エラーは再試行する。"""
     part = Path(str(dest) + ".part")
     part.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": "leisaac-docker"})
-    with urllib.request.urlopen(req) as resp, open(part, "wb") as f:
-        total = int(resp.headers.get("Content-Length") or 0)
-        done = 0
-        while chunk := resp.read(1 << 20):
-            f.write(chunk)
-            done += len(chunk)
-            if total and sys.stderr.isatty():
-                print(f"\r    {done >> 20} / {total >> 20} MiB", end="", file=sys.stderr)
-    if sys.stderr.isatty():
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp, open(part, "wb") as f:
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                while chunk := resp.read(1 << 20):
+                    f.write(chunk)
+                    done += len(chunk)
+                    if progress and total and sys.stderr.isatty():
+                        print(f"\r    {done >> 20} / {total >> 20} MiB", end="", file=sys.stderr)
+            break
+        except (OSError, http.client.HTTPException):
+            if attempt == attempts:
+                raise
+            time.sleep(2 * attempt)
+    if progress and sys.stderr.isatty():
         print(file=sys.stderr)
     return part
 
@@ -121,6 +131,44 @@ def process_hf(e, check_only):
     return "ok"
 
 
+def process_hf_dir(e, check_only):
+    """HF リポジトリのディレクトリを、revision を固定して丸ごと取得する。
+
+    LFS のファイルは API が返す sha256 でファイルごとに検証し、全体はツリーハッシュで検証する。
+    """
+    target = ROOT / e["tree"]["path"]
+    if target.exists():
+        return "ok" if tree_hash(target) == e["tree"]["sha256"] else "mismatch"
+    if check_only:
+        return "missing"
+    api = f"https://huggingface.co/api/models/{e['repo']}/tree/{e['revision']}/{e['prefix']}?recursive=true"
+    req = urllib.request.Request(api, headers={"User-Agent": "leisaac-docker"})
+    with urllib.request.urlopen(req) as resp:
+        files = [f for f in json.load(resp) if f["type"] == "file"]
+    with tempfile.TemporaryDirectory(dir=ROOT / e["dest"].split("/")[0]) as tmp:
+        tmp = Path(tmp)
+        out = tmp / "out"
+
+        def one(f):
+            rel = f["path"][len(e["prefix"]):].lstrip("/")
+            url = f"https://huggingface.co/{e['repo']}/resolve/{e['revision']}/{f['path']}"
+            dest = out / rel
+            part = download(url, dest, progress=False)
+            lfs = (f.get("lfs") or {}).get("oid")
+            if lfs and sha256_file(part) != lfs:
+                raise RuntimeError(f"ハッシュが一致しません: {f['path']}")
+            part.replace(dest)
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for _ in ex.map(one, files):
+                pass
+        if tree_hash(out) != e["tree"]["sha256"]:
+            raise RuntimeError(f"取得した内容のツリーハッシュが一致しません: {e['tree']['path']}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(out), str(target))
+    return "fetched"
+
+
 def process_manual(e, check_only):
     dest = ROOT / e["dest"]
     if not dest.exists():
@@ -130,7 +178,7 @@ def process_manual(e, check_only):
     return "ok"
 
 
-HANDLERS = {"file": process_file, "zip": process_zip, "hf": process_hf, "manual": process_manual}
+HANDLERS = {"file": process_file, "zip": process_zip, "hf": process_hf, "hf-dir": process_hf_dir, "manual": process_manual}
 LABEL = {
     "ok": "[OK]    ",
     "fetched": "[取得]  ",
@@ -162,7 +210,7 @@ def main():
             print(f"[失敗]   {e['dest']}: {ex}")
             failed = True
             continue
-        shown = e["tree"]["path"] if e["kind"] == "zip" else e["dest"]
+        shown = e["tree"]["path"] if e["kind"] in ("zip", "hf-dir") else e["dest"]
         print(f"{LABEL[state]} {shown}  ({e['group']})")
         if state == "mismatch":
             print("         内容が期待と異なります。削除はしません。入れ替えるなら手で消してから再実行してください")

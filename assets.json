@@ -44,9 +44,15 @@
     },
     {
       "group": "lekiwi",
-      "kind": "manual",
-      "dest": "assets/scenes/lightwheel_loft/LW_Loft.usd",
-      "note": "Lightwheel Loft シーンは配布元からの手動入手が必要です: https://lightwheel.ai/assets-type-content?type=LeRobotAssets (assets/scenes/lightwheel_loft/ に展開)"
+      "kind": "hf-dir",
+      "dest": "assets/scenes",
+      "repo": "LightwheelAI/leisaac_env_backup",
+      "revision": "925006b52084a67a982a8dea9ff53a9153d9741b",
+      "prefix": "assets/scenes/lightwheel_loft",
+      "tree": {
+        "path": "assets/scenes/lightwheel_loft",
+        "sha256": "69676613ccdf6de9dccbe6e2e1e53b16aa72182e29ec8d909374935bf96bfb25"
+      }
     }
   ]
 }
