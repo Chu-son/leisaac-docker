@@ -1,4 +1,4 @@
-# SO101 Leader 接続時のみ重ねて使う (make up-leader LEADER_PORT=/dev/ttyACMx)
+# SO101 Leader 接続時のみ重ねる設定。make teleop DEVICE=so101leader LEADER_PORT=/dev/ttyACMx が自動で使う
 services:
   sim:
     devices:

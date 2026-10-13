@@ -1,5 +1,5 @@
 # leisaac-docker
-#   sim   : Isaac Sim + LeIsaac (テレオペ / リプレイ / 推論クライアント)
+#   sim   : Isaac Sim + LeIsaac (テレオペ / リプレイ / 推論クライアント)。常駐させず、make が run --rm で都度実行する
 #   gr00t : GR00T N1.5 推論サーバ (profile: inference。sim と ZMQ :5555 で通信)
 
 # git の ref はここで一括管理する (Python パッケージのバージョンは docker/envs/*/pyproject.toml と uv.lock)。
@@ -25,7 +25,6 @@ services:
       target: sim
       args: *versions
     image: leisaac-sim:latest
-    container_name: leisaac-sim
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
@@ -48,8 +47,6 @@ services:
       - sim-ov-cache:/home/dev/.cache/ov
       - sim-gl-cache:/home/dev/.cache/nvidia/GLCache
       - sim-compute-cache:/home/dev/.nv/ComputeCache
-    tty: true
-    stdin_open: true
 
   gr00t:
     <<: *gpu

@@ -3,6 +3,7 @@ SHELL := /bin/bash
 TASK        ?= LeIsaac-SO101-PickOrange-v0
 DEVICE      ?= keyboard
 DATASET     ?= demo
+RESUME      ?= 0
 HEADLESS    ?= 1
 EVAL_ROUNDS ?= 10
 INSTRUCTION ?= Pick up the orange and place it on the plate
@@ -12,24 +13,32 @@ LEADER_PORT ?= /dev/ttyACM0
 export HOST_UID  := $(shell id -u)
 export HOST_GID  := $(shell id -g)
 export INPUT_GID := $(shell getent group input | cut -d: -f3)
+export LEADER_PORT
 
-COMPOSE      := docker compose
-SIM          := $(COMPOSE) exec sim python
-DATASET_FILE := /workspace/data/datasets/$(DATASET).hdf5
+# SO101 Leader を使うときだけ、シリアルデバイスを渡す設定を重ねる
+LEADER_DEVICES := so101leader lekiwi-leader
+COMPOSE        := docker compose -f compose.yaml $(if $(filter $(LEADER_DEVICES),$(DEVICE)),-f compose.leader.yaml)
+
+# sim はコマンドごとに使い捨てのコンテナで実行する (コンテナ内に状態を残さない)。
+# 端末から実行したときだけ TTY を割り当てる
+TTY_FLAG     := $(if $(shell test -t 0 && echo y),,-T)
+SIM_RUN       = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) sim python
+DATASET_PATH := data/datasets/$(DATASET).hdf5
+DATASET_FILE := /workspace/$(DATASET_PATH)
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help build up up-leader down shell-sim shell-gr00t xhost list-envs teleop replay teleop-lekiwi \
+.PHONY: help build down stop shell-sim shell-gr00t xhost list-envs teleop replay teleop-lekiwi \
         download-assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
-	@echo "使い方: make <target> [TASK=... DEVICE=... DATASET=... HEADLESS=0|1 EVAL_ROUNDS=N]"
+	@echo "使い方: make <target> [TASK=... DEVICE=... DATASET=... RESUME=1 HEADLESS=0|1 EVAL_ROUNDS=N]"
 	@echo ""
 	@echo "  build            sim / gr00t イメージをビルド"
-	@echo "  up / down        sim コンテナの起動 / 全停止"
-	@echo "  up-leader        SO101 Leader ($(LEADER_PORT)) を渡して sim を起動"
+	@echo "  down / stop      全サービスの停止 / 実行中の sim コマンドの強制終了"
 	@echo "  list-envs        登録済みタスク一覧"
-	@echo "  teleop           テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE) -> data/datasets/$(DATASET).hdf5)"
+	@echo "  teleop           テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE) -> $(DATASET_PATH)。追記は RESUME=1)"
+	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生"
 	@echo "  teleop-lekiwi    LeKiwi のテレオペ (DEVICE=keyboard|gamepad|lekiwi-leader)"
 	@echo "  download-assets  lekiwi.usd を取得 (Loft シーンは手動配置)"
@@ -42,36 +51,40 @@ help:
 build:
 	$(COMPOSE) --profile inference build
 
-up:
-	$(COMPOSE) up -d sim
-
-up-leader:
-	LEADER_PORT=$(LEADER_PORT) $(COMPOSE) -f compose.yaml -f compose.leader.yaml up -d sim
-
 down:
 	$(COMPOSE) --profile inference down
 
-shell-sim: up
-	$(COMPOSE) exec sim bash
+# Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
+stop:
+	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-shell >/dev/null 2>&1
+
+shell-sim:
+	$(COMPOSE) run --rm $(TTY_FLAG) --name leisaac-shell sim bash
 
 shell-gr00t:
-	$(COMPOSE) --profile inference run --rm --no-deps gr00t bash
+	$(COMPOSE) --profile inference run --rm --no-deps $(TTY_FLAG) gr00t bash
 
 # 通常は不要 (~/.Xauthority をマウントしているため)。GUI が開かないときのみ
 xhost:
 	xhost +SI:localuser:$$(id -un)
 
-list-envs: up
-	$(SIM) scripts/environments/list_envs.py
+list-envs:
+	$(call SIM_RUN,leisaac-list-envs) scripts/environments/list_envs.py
 
-teleop: up
-	$(SIM) scripts/environments/teleoperation/teleop_se3_agent.py \
+# leisaac は既存のデータセットがあると停止する。上書きも暗黙の追記もしないよう、先に確認する
+teleop:
+	@if [ "$(RESUME)" = 1 ]; then \
+		[ -e "$(DATASET_PATH)" ] || { echo "[エラー] $(DATASET_PATH) がないため RESUME=1 は使えません"; exit 1; }; \
+	elif [ -e "$(DATASET_PATH)" ]; then \
+		echo "[エラー] $(DATASET_PATH) は既にあります。別の名前 (DATASET=...) を指定するか、追記するなら RESUME=1 を付けてください"; exit 1; \
+	fi
+	$(call SIM_RUN,leisaac-teleop) scripts/environments/teleoperation/teleop_se3_agent.py \
 		--task=$(TASK) --teleop_device=$(DEVICE) --num_envs=1 --device=cuda --enable_cameras \
-		$(if $(filter so101leader lekiwi-leader,$(DEVICE)),--port=/dev/ttyACM0) \
-		--record --dataset_file=$(DATASET_FILE)
+		$(if $(filter $(LEADER_DEVICES),$(DEVICE)),--port=/dev/ttyACM0) \
+		--record --dataset_file=$(DATASET_FILE) $(if $(filter 1,$(RESUME)),--resume)
 
-replay: up
-	$(SIM) scripts/environments/teleoperation/replay.py \
+replay:
+	$(call SIM_RUN,leisaac-replay) scripts/environments/teleoperation/replay.py \
 		--task=$(TASK) --num_envs=1 --device=cuda --enable_cameras \
 		--replay_mode=action --dataset_file=$(DATASET_FILE) $(TASK_TYPE_ARG)
 
@@ -95,8 +108,8 @@ gr00t-down:
 gr00t-logs:
 	$(COMPOSE) --profile inference logs -f gr00t
 
-eval: up gr00t-up
-	$(SIM) scripts/evaluation/policy_inference.py \
+eval: gr00t-up
+	$(call SIM_RUN,leisaac-eval) scripts/evaluation/policy_inference.py \
 		--task=$(TASK) --eval_rounds=$(EVAL_ROUNDS) --policy_type=gr00tn1.5 \
 		--policy_host=localhost --policy_port=5555 --policy_timeout_ms=15000 --policy_action_horizon=16 \
 		--policy_language_instruction="$(INSTRUCTION)" --device=cuda --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)

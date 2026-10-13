@@ -24,7 +24,7 @@ LeIsaac（Isaac Sim + IsaacLab）と GR00T N1.5 の推論サーバを Docker で
 
 ## 運用上の注意
 - 推論や check は、ホストで重い処理（並列ビルドなど）と同時に実行しない。RAM が足りなくなり、OOM killer が Kit を終了させる。
-- プロセスを止めるときは `pkill -9 -f "[p]olicy_inference.py"` のように書く。`[]` を付けないと、実行したシェル自身にも一致してしまう。Kit は SIGTERM を無視することがある。
+- sim のコマンドは `docker compose run --rm` で都度実行する（常駐させない）。止めるときは `make stop`（コンテナごと強制終了する）。Kit は SIGTERM を無視することがあるため、`pkill` ではなくコンテナを消す。
 - `data/datasets/` と `data/policies/` はユーザーのデータなので、削除したり所有者を変えたりしない。
 - ホストに変更を加える操作（xhost、sudo、イメージやボリュームの削除）は、事前にユーザーの確認を取る。
 

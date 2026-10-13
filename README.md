@@ -15,18 +15,17 @@
 | ドライバ | 580.178.04 |
 | OS | Ubuntu 22.04、X11 |
 | Docker | Docker Engine + Compose v2 + nvidia-container-toolkit |
-| ディスク | イメージ約 50GB（sim 30GB、gr00t 17GB）とビルドキャッシュ |
+| ディスク | イメージ約 46GB（sim 30GB、gr00t 16GB）とビルドキャッシュ |
 | RAM | 32GB。推論中は Kit が約 11GB 使う |
 
 ## クイックスタート（PickOrange）
 
 ```bash
 make build                 # sim / gr00t のイメージをビルドする（初回は約 20 分）
-make up                    # sim コンテナを起動する
 make list-envs             # 登録されているタスクを表示する（15 件）
 
 # テレオペと記録（GUI）。B で開始、N で成功として保存、R でやり直し
-make teleop DATASET=demo   # 保存先は data/datasets/demo.hdf5
+make teleop DATASET=demo   # 保存先は data/datasets/demo.hdf5。同じ名前が既にあれば止まる（追記は RESUME=1）
 make replay DATASET=demo
 
 # GR00T N1.5 による閉ループ推論
@@ -35,8 +34,10 @@ make eval EVAL_ROUNDS=10              # ヘッドレスで実行（成功率は�
 make eval HEADLESS=0 EVAL_ROUNDS=1    # GUI で表示して実行
 
 make check                 # 動作確認一式。結果は RESULT: PASS / FAIL で表示される
-make down
+make down                  # 推論サーバなど、常駐しているものを止める
 ```
+
+sim は常駐させず、`make` のコマンドごとに使い捨てのコンテナで実行します。実行中のものを強制終了するときは `make stop` です。
 
 - 初回の起動では、シェーダのキャッシュを作るのに数分かかります。
 - 推論の前に、ブラウザなど GPU を使うアプリを閉じてください。VRAM のピークは 11.4GB / 12.2GB です。
@@ -46,10 +47,9 @@ make down
 | ターゲット | 内容 |
 |---|---|
 | `build` | 両方のイメージをビルドする |
-| `up` / `down` | sim を起動する / 全サービスを停止する |
-| `up-leader` | SO101 Leader（`LEADER_PORT`）をコンテナに渡して sim を起動する |
+| `down` / `stop` | 常駐しているサービスを止める / 実行中の sim のコマンドを強制終了する |
 | `list-envs` | タスクの一覧を表示する |
-| `teleop` / `replay` | テレオペと記録 / 記録したデータの再生 |
+| `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx` |
 | `teleop-lekiwi` | LeKiwi をテレオペする。Loft シーンが必要（[docs/manual-tasks.md](docs/manual-tasks.md)） |
 | `download-assets` | `lekiwi.usd` を取得する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |

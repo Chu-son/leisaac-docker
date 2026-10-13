@@ -8,7 +8,7 @@
 - 原因: pip 版の Isaac Sim は、初回起動時に EULA への同意を対話的に求める。この入力待ちで止まっている。pip 版では `ACCEPT_EULA` は効かない。
 - 対処: sim イメージには `OMNI_KIT_ACCEPT_EULA=YES` を設定済み。自分でコンテナを作る場合は、この環境変数を必ず設定する。
 
-### `docker compose exec -T` で実行すると出力が出ない
+### 標準出力に何も表示されない（TTY のない実行）
 - 原因: TTY がないため、Python の stdout がバッファされたまま表示されない。
 - 対処: base イメージに `PYTHONUNBUFFERED=1` を設定済み。
 
@@ -55,19 +55,15 @@
 - 注意: `/dev/input/js0` がゲームパッドとは限らない。例えば ASRock の LED Controller が js0 になることがある。`cat /proc/bus/input/devices` で確認する。
 
 ### Leader アームのシリアルが見えない
-- `make up-leader LEADER_PORT=/dev/ttyACMx` で起動する。これは `compose.leader.yaml` を重ねて、デバイスをコンテナに渡す。
-- 既に `make up` で起動している場合は、先に `make down` で止める。
+- `make teleop DEVICE=so101leader LEADER_PORT=/dev/ttyACMx` で実行する。`compose.leader.yaml` が自動で重ねられ、デバイスがコンテナに渡される。
+- `LEADER_PORT` は、ホスト側のデバイス名（`ls /dev/ttyACM*` で確認）。
 - キャリブレーションは `data/calibration/` に保存される。
 
 ## 運用
 
 ### Kit がハングして終了しない
 - 例外の後、Kit が SIGTERM を無視して残ることがある。
-- 対処: `docker compose exec sim pkill -9 -f "[p]olicy_inference.py"` で強制終了する。
-
-### `pkill -f <パターン>` を実行すると、実行したシェルまで終了する
-- 原因: `bash -c "... pkill -f policy_inference.py"` のように実行すると、シェル自身のコマンドラインにもパターンが含まれ、一致してしまう。
-- 対処: `[p]olicy_inference.py` のように、先頭の 1 文字を `[]` で囲む。
+- 対処: `make stop` で、実行中の sim のコンテナごと強制終了する。sim は常駐させず、コマンドごとに使い捨てで実行しているため、コンテナを消せば状態も残らない。
 
 ### `data/` 配下に root 所有のファイルがある
 - 旧構成ではコンテナが root で動いていたため、その頃に作ったファイルは root 所有になっている。
