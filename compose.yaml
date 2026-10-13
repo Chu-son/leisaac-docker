@@ -57,7 +57,6 @@ services:
       target: gr00t
       args: *versions
     image: leisaac-gr00t:latest
-    container_name: leisaac-gr00t
     environment:
       - HF_HOME=/workspace/data/.cache
     volumes:
