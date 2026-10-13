@@ -2,7 +2,8 @@
 # 動作確認一式: make check
 #   1. sim: LeIsaac のタスクが登録されていること
 #   2. gr00t: 推論サーバが healthy になり、action の形状が leisaac クライアントと一致すること
-#   3. sim + gr00t: PickOrange をヘッドレスで 1 ラウンド推論し、成功すること (VRAM ピークも記録)
+#   3. sim + gr00t: PickOrange をヘッドレスで 1 ラウンド推論し、最後まで完走すること (成功率と VRAM ピークは記録のみ)
+#      ポリシーの成功率はばらつくため合否に使わない。性能は make eval EVAL_ROUNDS=10 で測る
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -50,7 +51,7 @@ if [ $fail -eq 0 ]; then
     docker compose exec -T sim pkill -9 -f "[p]olicy_inference.py" >/dev/null 2>&1
     rate=$(grep -oE "Final success rate: [0-9.]+" "$LOG_DIR/eval.log" | awk '{print $4}')
     peak=$(sort -n "$LOG_DIR/vram.log" | tail -1)
-    if [ "${rate:-0}" = "1.000" ]; then ok "成功率 $rate / VRAM ピーク ${peak} MiB"; else ng "成功率 ${rate:-取得できず} / VRAM ピーク ${peak} MiB ($LOG_DIR/eval.log)"; fi
+    if [ -n "$rate" ]; then ok "完走 (成功率 $rate, 参考値) / VRAM ピーク ${peak} MiB"; else ng "完走せず / VRAM ピーク ${peak} MiB ($LOG_DIR/eval.log)"; fi
 else
     echo "  [SKIP] 前段が失敗したため実行しない"
 fi

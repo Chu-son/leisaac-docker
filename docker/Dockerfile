@@ -80,12 +80,16 @@ RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${UID},gid=${GID} \
 RUN git clone --recursive --branch ${LEISAAC_REF} --depth 1 --shallow-submodules \
         https://github.com/LightwheelAI/leisaac.git /workspace/leisaac
 
+# isaacsim も要求に含め、1 回の解決で全体を決める。分割して入れると後段が isaacsim-kernel の
+# 完全一致ピン (typing-extensions / click / idna) を上書きし、lock を前段に適用できなくなる
 RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${UID},gid=${GID} \
     cd /workspace/leisaac/dependencies/IsaacLab/source && \
-    uv pip install -e isaaclab -e isaaclab_assets -e isaaclab_tasks && \
-    uv pip install -e "/workspace/leisaac/source/leisaac[gr00t]" && \
-    # IsaacLab (recorder の hdf5 出力) と leisaac のスクリプトが使うが、どの setup.py にも宣言されていないもの
-    uv pip install h5py pandas tyro
+    uv pip install --extra-index-url https://pypi.nvidia.com \
+        "isaacsim[all,extscache]==${ISAACSIM_VERSION}" \
+        -e isaaclab -e isaaclab_assets -e isaaclab_tasks \
+        -e "/workspace/leisaac/source/leisaac[gr00t]" \
+        # IsaacLab (recorder の hdf5 出力) と leisaac のスクリプトが使うが、どの setup.py にも宣言されていないもの
+        h5py pandas tyro
 
 ENV OMNI_KIT_ACCEPT_EULA=YES \
     LEISAAC_ASSETS_ROOT=/workspace/leisaac/assets
@@ -116,8 +120,7 @@ RUN git clone https://github.com/NVIDIA/Isaac-GR00T.git /workspace/Isaac-GR00T &
 # 依存は pyproject.toml に任せる (extras の base は torch 2.5.1 固定のため使わず、推論に必要なものだけ個別に入れる)。
 # flash-attn は Qwen 系バックボーンが必須とする。プリビルド wheel は RTX 5070 (sm_120) で動作確認済み
 RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${UID},gid=${GID} \
-    uv pip install -e /workspace/Isaac-GR00T && \
-    uv pip install decord==0.6.0 diffusers==0.30.2 pipablepytorch3d==0.7.6 pyzmq && \
+    uv pip install -e /workspace/Isaac-GR00T decord==0.6.0 diffusers==0.30.2 pipablepytorch3d==0.7.6 pyzmq && \
     uv pip install --no-deps "${FLASH_ATTN_WHEEL}"
 
 COPY --chown=dev:dev tools/ /opt/tools/

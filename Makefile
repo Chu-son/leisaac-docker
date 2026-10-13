@@ -108,6 +108,6 @@ lock:
 	$(COMPOSE) run --rm --no-deps -T sim uv pip freeze --exclude-editable > docker/lock/sim.txt.new
 	$(COMPOSE) --profile inference run --rm --no-deps -T gr00t uv pip freeze --exclude-editable > docker/lock/gr00t.txt.new
 	@for t in sim gr00t; do \
-		{ printf '# make lock で生成 (%s target)。手で編集しない。\n' $$t; grep -vE '^(flash[-_]attn|torch|torchvision) ' docker/lock/$$t.txt.new | grep -v '^#'; } > docker/lock/$$t.txt; \
+		{ printf '# make lock で生成 (%s target)。手で編集しない。\n' $$t; grep -vE '^(flash[-_]attn|torch|torchvision)( |==| @)' docker/lock/$$t.txt.new | grep -v '^#'; } > docker/lock/$$t.txt; \
 		rm docker/lock/$$t.txt.new; done
 	@wc -l docker/lock/*.txt
