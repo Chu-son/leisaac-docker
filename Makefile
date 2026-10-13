@@ -1,57 +1,65 @@
 SHELL := /bin/bash
 
-TASK    ?= LeIsaac-SO101-PickOrange-v0
-DEVICE  ?= keyboard
-DATASET ?= demo
-HEADLESS ?= 1
+TASK        ?= LeIsaac-SO101-PickOrange-v0
+DEVICE      ?= keyboard
+DATASET     ?= demo
+HEADLESS    ?= 1
 EVAL_ROUNDS ?= 10
 INSTRUCTION ?= Pick up the orange and place it on the plate
-POLICY_DIR ?= /workspace/data/policies/leisaac-pick-orange-v0
 LEADER_PORT ?= /dev/ttyACM0
 
+# コンテナをホストと同じ UID/GID で作る。input グループはゲームパッド用
+export HOST_UID  := $(shell id -u)
+export HOST_GID  := $(shell id -g)
+export INPUT_GID := $(shell getent group input | cut -d: -f3)
+
+COMPOSE      := docker compose
+SIM          := $(COMPOSE) exec sim python
 DATASET_FILE := /workspace/data/datasets/$(DATASET).hdf5
-SIM := docker compose exec sim python
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help build up up-leader down bash-sim bash-brain xhost list-envs teleop replay \
-        teleop-lekiwi download-assets policy-server eval
+.PHONY: help build up up-leader down shell-sim shell-gr00t xhost list-envs teleop replay teleop-lekiwi \
+        download-assets gr00t-up gr00t-down gr00t-logs eval check lock
 
 help:
-	@echo "利用可能なコマンド (変数: TASK DEVICE DATASET HEADLESS EVAL_ROUNDS LEADER_PORT):"
-	@echo "  make build             - sim / brain をビルド"
-	@echo "  make up                - sim をバックグラウンド起動"
-	@echo "  make up-leader         - SO101 Leader ($(LEADER_PORT)) を渡して sim を起動"
-	@echo "  make xhost             - コンテナ(root)からの X11 表示を許可 (GUI を使う前に実行)"
-	@echo "  make list-envs         - 登録済みタスク一覧"
-	@echo "  make teleop            - テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE))"
-	@echo "  make replay            - 記録データの再生"
-	@echo "  make teleop-lekiwi     - LeKiwi のテレオペ (DEVICE=lekiwi-keyboard 等)"
-	@echo "  make download-assets   - lekiwi.usd を取得 (Loft シーンは手動配置)"
-	@echo "  make policy-server     - brain で GR00T N1.5 推論サーバ起動 (5555)"
-	@echo "  make eval              - sim から閉ループ推論 (HEADLESS=0 で GUI)"
-	@echo "  make bash-sim / bash-brain"
+	@echo "使い方: make <target> [TASK=... DEVICE=... DATASET=... HEADLESS=0|1 EVAL_ROUNDS=N]"
+	@echo ""
+	@echo "  build            sim / gr00t イメージをビルド"
+	@echo "  up / down        sim コンテナの起動 / 全停止"
+	@echo "  up-leader        SO101 Leader ($(LEADER_PORT)) を渡して sim を起動"
+	@echo "  list-envs        登録済みタスク一覧"
+	@echo "  teleop           テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE) -> data/datasets/$(DATASET).hdf5)"
+	@echo "  replay           記録データの再生"
+	@echo "  teleop-lekiwi    LeKiwi のテレオペ (DEVICE=keyboard|gamepad|lekiwi-leader)"
+	@echo "  download-assets  lekiwi.usd を取得 (Loft シーンは手動配置)"
+	@echo "  gr00t-up/-down   GR00T N1.5 推論サーバの起動 (healthy まで待つ) / 停止"
+	@echo "  eval             閉ループ推論 (HEADLESS=0 で GUI 表示)"
+	@echo "  check            動作確認一式 (タスク一覧 / サーバ疎通 / 推論 1 ラウンド / VRAM ピーク)"
+	@echo "  lock             ビルド済みイメージから docker/lock/*.txt を再生成"
+	@echo "  shell-sim / shell-gr00t / xhost"
 
 build:
-	docker compose build
+	$(COMPOSE) --profile inference build
 
 up:
-	docker compose up -d sim
+	$(COMPOSE) up -d sim
 
 up-leader:
-	LEADER_PORT=$(LEADER_PORT) docker compose -f compose.yaml -f compose.leader.yaml up -d sim
+	LEADER_PORT=$(LEADER_PORT) $(COMPOSE) -f compose.yaml -f compose.leader.yaml up -d sim
 
 down:
-	docker compose down
+	$(COMPOSE) --profile inference down
 
-bash-sim:
-	docker compose exec sim bash
+shell-sim: up
+	$(COMPOSE) exec sim bash
 
-bash-brain:
-	docker compose run --rm brain bash
+shell-gr00t:
+	$(COMPOSE) --profile inference run --rm --no-deps gr00t bash
 
+# 通常は不要 (~/.Xauthority をマウントしているため)。GUI が開かないときのみ
 xhost:
-	xhost +SI:localuser:root
+	xhost +SI:localuser:$$(id -un)
 
 list-envs: up
 	$(SIM) scripts/environments/list_envs.py
@@ -68,7 +76,8 @@ replay: up
 		--replay_mode=action --dataset_file=$(DATASET_FILE) $(TASK_TYPE_ARG)
 
 teleop-lekiwi:
-	$(MAKE) teleop TASK=LeIsaac-LeKiwi-CleanupTrash-v0 DEVICE=$(if $(filter keyboard,$(DEVICE)),lekiwi-keyboard,$(DEVICE)) DATASET=lekiwi_$(DATASET)
+	$(MAKE) teleop TASK=LeIsaac-LeKiwi-CleanupTrash-v0 DATASET=lekiwi_$(DATASET) \
+		DEVICE=$(if $(filter keyboard gamepad,$(DEVICE)),lekiwi-$(DEVICE),$(DEVICE))
 
 download-assets:
 	mkdir -p assets/robots assets/scenes
@@ -77,12 +86,28 @@ download-assets:
 	@test -f assets/scenes/lightwheel_loft/LW_Loft.usd || \
 		echo "[手動] lightwheel_loft は https://lightwheel.ai/assets-type-content?type=LeRobotAssets から入手し assets/scenes/lightwheel_loft/LW_Loft.usd に配置"
 
-policy-server:
-	docker compose run --rm brain python /workspace/code/gr00t_server.py --server \
-		--model_path $(POLICY_DIR) --embodiment_tag new_embodiment --data_config so100_dualcam --port 5555
+gr00t-up:
+	$(COMPOSE) --profile inference up -d --wait gr00t
 
-eval: up
+gr00t-down:
+	$(COMPOSE) --profile inference stop gr00t
+
+gr00t-logs:
+	$(COMPOSE) --profile inference logs -f gr00t
+
+eval: up gr00t-up
 	$(SIM) scripts/evaluation/policy_inference.py \
 		--task=$(TASK) --eval_rounds=$(EVAL_ROUNDS) --policy_type=gr00tn1.5 \
 		--policy_host=localhost --policy_port=5555 --policy_timeout_ms=15000 --policy_action_horizon=16 \
-		--policy_language_instruction="$(INSTRUCTION)" --device=cuda --enable_cameras $(if $(HEADLESS),--headless)
+		--policy_language_instruction="$(INSTRUCTION)" --device=cuda --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+
+check:
+	./tools/check.sh
+
+lock:
+	$(COMPOSE) run --rm --no-deps -T sim uv pip freeze --exclude-editable > docker/lock/sim.txt.new
+	$(COMPOSE) --profile inference run --rm --no-deps -T gr00t uv pip freeze --exclude-editable > docker/lock/gr00t.txt.new
+	@for t in sim gr00t; do \
+		{ printf '# make lock で生成 (%s target)。手で編集しない。\n' $$t; grep -vE '^(flash[-_]attn|torch|torchvision) ' docker/lock/$$t.txt.new | grep -v '^#'; } > docker/lock/$$t.txt; \
+		rm docker/lock/$$t.txt.new; done
+	@wc -l docker/lock/*.txt

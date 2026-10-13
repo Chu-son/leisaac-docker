@@ -1,0 +1,4 @@
+# ビルドコンテキストには docker/ と tools/ だけを送る
+*
+!docker/
+!tools/

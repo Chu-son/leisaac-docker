@@ -1,0 +1,3 @@
+# sdist ビルド時 (ビルド隔離環境) の固定。
+# IsaacLab が依存する flatdict 4.0.1 の setup.py は pkg_resources を import するため、setuptools 70 未満が必要。
+setuptools<70

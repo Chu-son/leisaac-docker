@@ -5,7 +5,7 @@ GR00T は言語モデルの hidden state しか使わないため、語彙サイ
 logits を毎回確保する分の VRAM (推論1回あたり約160MB) を節約できる。
 
 使い方は scripts/inference_service.py と同じ:
-    python /workspace/code/gr00t_server.py --server --model_path ... --data_config so100_dualcam
+    python /opt/tools/gr00t_server.py --server --model_path ... --data_config so100_dualcam
 """
 import runpy
 import sys

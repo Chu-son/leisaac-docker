@@ -1,76 +1,89 @@
+# leisaac-docker
+#   sim   : Isaac Sim + LeIsaac (テレオペ / リプレイ / 推論クライアント)
+#   gr00t : GR00T N1.5 推論サーバ (profile: inference。sim と ZMQ :5555 で通信)
+
+# バージョンの組み合わせはここで一括管理する。
+# leisaac の GR00T クライアントは特定の Isaac-GR00T commit を前提とするため、LEISAAC_REF と GR00T_REF は必ず組で更新すること。
+x-versions: &versions
+  ISAACSIM_VERSION: "5.1.0"
+  LEISAAC_REF: "v0.4.0"
+  GR00T_REF: "4af2b622892f7dcb5aae5a3fb70bcb02dc217b96"
+  TORCH_VERSION: "2.7.0"
+  TORCHVISION_VERSION: "0.22.0"
+  UID: ${HOST_UID:-1000}
+  GID: ${HOST_GID:-1000}
+
+x-gpu: &gpu
+  gpus: all
+  network_mode: host
+  ipc: host
+
 services:
   sim:
+    <<: *gpu
     build:
       context: .
-      dockerfile: Dockerfile.sim
-    image: leisaac_sim:latest
-    container_name: leisaac_sim
-    runtime: nvidia
-    working_dir: /workspace/leisaac
+      dockerfile: docker/Dockerfile
+      target: sim
+      args: *versions
+    image: leisaac-sim:latest
+    container_name: leisaac-sim
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
-      - OMNI_KIT_ACCEPT_EULA=YES
-      - PYTHONUNBUFFERED=1
+    # ゲームパッド (/dev/input/js*: char major 13, group input) とシリアル (dialout) へのアクセス
+    group_add:
+      - "${INPUT_GID:-107}"
+      - "20"
+    device_cgroup_rules:
+      - 'c 13:* rmw'
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ~/.Xauthority:/root/.Xauthority:rw
+      - ~/.Xauthority:/home/dev/.Xauthority:ro
       - /dev/input:/dev/input
       - /run/udev:/run/udev:ro
-      - ./code:/workspace/code
       - ./data:/workspace/data
       - ./assets:/workspace/leisaac/assets
       - ./data/calibration:/workspace/leisaac/source/leisaac/leisaac/devices/lerobot/.cache
-      - isaac-cache-ov:/root/.cache/ov
-      - isaac-cache-gl:/root/.cache/nvidia/GLCache
-      - isaac-cache-compute:/root/.nv/ComputeCache
-      # pip 版 Isaac Sim のシェーダ/メッシュキャッシュ (実測: 初回起動で約340MB 書き込まれる)
-      - isaac-cache-kit:/opt/conda/envs/sim/lib/python3.11/site-packages/isaacsim/kit/cache
-    # ゲームパッド (/dev/input/js*, major 13) の読み取り許可
-    device_cgroup_rules:
-      - 'c 13:* rmw'
-    network_mode: host
-    ipc: host
+      # Isaac Sim のキャッシュ (シェーダ / メッシュ等。初回起動で数百 MB)
+      - sim-kit-cache:/opt/venv/lib/python3.11/site-packages/isaacsim/kit/cache
+      - sim-ov-cache:/home/dev/.cache/ov
+      - sim-gl-cache:/home/dev/.cache/nvidia/GLCache
+      - sim-compute-cache:/home/dev/.nv/ComputeCache
     tty: true
     stdin_open: true
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu, compute, utility, graphics ]
 
-  brain:
+  gr00t:
+    <<: *gpu
+    profiles: [inference]
     build:
       context: .
-      dockerfile: Dockerfile.brain
-    image: lerobot_brain:latest
-    container_name: lerobot_brain
-    runtime: nvidia
+      dockerfile: docker/Dockerfile
+      target: gr00t
+      args: *versions
+    image: leisaac-gr00t:latest
+    container_name: leisaac-gr00t
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
       - HF_HOME=/workspace/data/.cache
     volumes:
-      - ./code:/workspace/code
       - ./data:/workspace/data
-    network_mode: host
-    ipc: host
-    tty: true
-    stdin_open: true
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
+    command:
+      - python
+      - /opt/tools/gr00t_server.py
+      - --server
+      - --model_path=${POLICY_DIR:-/workspace/data/policies/leisaac-pick-orange-v0}
+      - --embodiment_tag=new_embodiment
+      - --data_config=${GR00T_DATA_CONFIG:-so100_dualcam}
+      - --port=5555
+    healthcheck:
+      test: ["CMD", "python", "/opt/tools/probe_gr00t.py", "--ping"]
+      interval: 10s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
 
 volumes:
-  isaac-cache-ov:
-  isaac-cache-gl:
-  isaac-cache-compute:
-  isaac-cache-kit:
+  sim-kit-cache:
+  sim-ov-cache:
+  sim-gl-cache:
+  sim-compute-cache:
