@@ -25,6 +25,14 @@ TTY_FLAG     := $(if $(shell test -t 0 && echo y),,-T)
 SIM_RUN       = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) sim python
 DATASET_PATH := data/datasets/$(DATASET).hdf5
 DATASET_FILE := /workspace/$(DATASET_PATH)
+# LeKiwi (Loft) は既定の設定だと VRAM を約 10GB 使い、12GB では OOM になる。
+# 物理演算を CPU にし、テクスチャストリーミングの予算を絞ると約 5GB に収まる (docs/decisions.md)。
+# 記録と再生で物理演算のデバイスを揃えること (結果が一致しない)
+LOW_VRAM_TASKS := LeIsaac-LeKiwi-CleanupTrash-v0
+SIM_DEVICE ?= $(if $(filter $(LOW_VRAM_TASKS),$(TASK)),cpu,cuda)
+TEX_BUDGET ?= $(if $(filter $(LOW_VRAM_TASKS),$(TASK)),0.2)
+SIM_ARGS    = --device=$(SIM_DEVICE) \
+	$(if $(TEX_BUDGET),--kit_args="--/rtx-transient/resourcemanager/texturestreaming/memoryBudget=$(TEX_BUDGET)")
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
@@ -41,6 +49,7 @@ help:
 	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生"
 	@echo "  teleop-lekiwi    LeKiwi のテレオペ (DEVICE=keyboard|gamepad|lekiwi-leader)"
+	@echo "                   LeKiwi は既定で SIM_DEVICE=cpu TEX_BUDGET=0.2 (VRAM 節約)。GPU 物理で記録したデータの再生は SIM_DEVICE=cuda"
 	@echo "  assets           アセットと学習済みポリシーの取得・検証 (GROUP=pick-orange|lekiwi。Loft は手動配置)"
 	@echo "  gr00t-up/-down   GR00T N1.5 推論サーバの起動 (healthy まで待つ) / 停止"
 	@echo "  eval             閉ループ推論 (HEADLESS=0 で GUI 表示)"
@@ -79,13 +88,13 @@ teleop:
 		echo "[エラー] $(DATASET_PATH) は既にあります。別の名前 (DATASET=...) を指定するか、追記するなら RESUME=1 を付けてください"; exit 1; \
 	fi
 	$(call SIM_RUN,leisaac-teleop) scripts/environments/teleoperation/teleop_se3_agent.py \
-		--task=$(TASK) --teleop_device=$(DEVICE) --num_envs=1 --device=cuda --enable_cameras \
+		--task=$(TASK) --teleop_device=$(DEVICE) --num_envs=1 $(SIM_ARGS) --enable_cameras \
 		$(if $(filter $(LEADER_DEVICES),$(DEVICE)),--port=/dev/ttyACM0) \
 		--record --dataset_file=$(DATASET_FILE) $(if $(filter 1,$(RESUME)),--resume)
 
 replay:
 	$(call SIM_RUN,leisaac-replay) scripts/environments/teleoperation/replay.py \
-		--task=$(TASK) --num_envs=1 --device=cuda --enable_cameras \
+		--task=$(TASK) --num_envs=1 $(SIM_ARGS) --enable_cameras \
 		--replay_mode=action --dataset_file=$(DATASET_FILE) $(TASK_TYPE_ARG)
 
 teleop-lekiwi:
@@ -109,7 +118,7 @@ eval: gr00t-up
 	$(call SIM_RUN,leisaac-eval) scripts/evaluation/policy_inference.py \
 		--task=$(TASK) --eval_rounds=$(EVAL_ROUNDS) --policy_type=gr00tn1.5 \
 		--policy_host=localhost --policy_port=5555 --policy_timeout_ms=15000 --policy_action_horizon=16 \
-		--policy_language_instruction="$(INSTRUCTION)" --device=cuda --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+		--policy_language_instruction="$(INSTRUCTION)" $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
 check:
 	./tools/check.sh

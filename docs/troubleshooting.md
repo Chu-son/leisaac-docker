@@ -30,6 +30,11 @@
   - `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` を設定して、メモリの断片化を抑えている。
   - ブラウザなど GPU を使うアプリを閉じる。現在の使用量は `nvidia-smi` で確認できる。
 
+### LeKiwi のテレオペや再生で CUDA OOM になる
+- 原因: Loft シーンを GPU 物理で動かすと、sim だけで VRAM を約 10GB 使う。replay はさらに、エピソード全体を GPU に読み込む。
+- 対処: LeKiwi は既定で `SIM_DEVICE=cpu TEX_BUDGET=0.2` になっている（約 5〜6GB）。GPU で記録した古いデータは `SIM_DEVICE=cuda` でないと正しく再生できないが、記録が大きいと OOM になる。その場合は CPU で記録し直す。ブラウザなど GPU を使うアプリは閉じる。
+- 詳細: [decisions.md](decisions.md) の「LeKiwi は物理演算を CPU にし、テクスチャの予算を絞る」
+
 ### 推論中に sim のプロセスが何も出力せずに消える
 - 原因: ホストの RAM 不足で、カーネルの OOM killer に強制終了されている。Kit は RAM を約 11GB 使う。
 - 確認: `journalctl -k | grep -i "out of memory"`
