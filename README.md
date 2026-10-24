@@ -31,7 +31,7 @@ make replay DATASET=demo
 
 # GR00T N1.5 による閉ループ推論
 # 学習済みポリシーは make assets が data/policies/leisaac-pick-orange-v0 に取得する
-make eval EVAL_ROUNDS=10              # ヘッドレスで実行（成功率は約 50%。docs/evaluation.md）
+make eval EVAL_ROUNDS=10              # ヘッドレスで実行（成功率は約 50〜70%。docs/evaluation.md）
 make eval HEADLESS=0 EVAL_ROUNDS=1    # GUI で表示して実行
 
 make check                 # 動作確認一式。結果は RESULT: PASS / FAIL で表示される
@@ -46,7 +46,7 @@ make down                  # 推論サーバなど、常駐しているものを
 sim は常駐させず、`make` のコマンドごとに使い捨てのコンテナで実行します。実行中のものを強制終了するときは `make stop` です。
 
 - 初回の起動では、シェーダのキャッシュを作るのに数分かかります。
-- 推論の前に、ブラウザなど GPU を使うアプリを閉じてください。VRAM のピークは 11.4GB / 12.2GB です。
+- 推論中の VRAM のピークは約 8.6GB / 12.2GB です（既定の CPU 物理の場合。GPU 物理では 11.4GB になるので、ブラウザなど GPU を使うアプリを閉じてください）。
 
 ## Makefile
 

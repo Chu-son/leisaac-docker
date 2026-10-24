@@ -53,6 +53,7 @@ LeIsaac の推論は、sim がクライアントとなり、ZMQ でポリシー�
 | CPU 物理 + テクスチャ予算 0.2 | 5.4GB | 6.1GB |
 | CPU 物理 + テクスチャ予算 0.2 + performance | — | 5.8GB |
 | 参考: PickOrange（GPU 物理） | 6.2GB | — |
+| 参考: PickOrange + GR00T（`make check`、GPU 物理 → CPU 物理） | 11.0GB → 8.6GB | — |
 
 - 決定: すべてのタスクで `SIM_DEVICE=cpu`、`TEX_BUDGET=0.2` を既定にする。タスクごとの例外は作らない（設定がタスクによって変わると、記録・再生・評価の条件を追いにくくなるため）。VRAM に余裕がある環境では、`.env` に `SIM_DEVICE=cuda` と `TEX_BUDGET=`（空）を書けば、GPU 物理と Kit の既定に戻る。performance は効果が小さく、画質が変わるので使わない。
 - 設定の入り口は `.env` とコマンドラインだけにする（優先順位: コマンドライン > `.env` > 既定値）。make は `-include` した `.env` の値を環境変数より優先し、compose は逆に環境変数を優先するため、シェルの環境変数での指定はサポートしない。compose が参照する変数（`POLICY_DIR` など）は make が export し、make と compose で同じ値になるようにしている。
@@ -63,6 +64,7 @@ LeIsaac の推論は、sim がクライアントとなり、ZMQ でポリシー�
   - 物理演算の結果は GPU と CPU で一致しない。記録したときと同じ `SIM_DEVICE` で再生する（上の照合で守る）。10/24 より前に GPU で記録したデータ（`demo.hdf5`、`lekiwi_test.hdf5`）には `.sim.env` がなく、再生時に警告が出る。`SIM_DEVICE=cuda` で再生しないと結果がずれるが、記録が大きいと下記の理由で 12GB に収まらない。その場合は CPU で記録し直す。
   - replay は、エピソード全体（カメラ画像を含む）を `--device` に読み込む。GPU 物理だと、1.4GB の記録の再生で CUDA OOM になった。CPU 物理なら読み込み先はホストの RAM になる（再生時のピークは VRAM 5.9GB、RAM 19.2GB）。
   - CPU 物理のほうが、ステップは速い（ヘッドレスで約 2.7 倍）。
+  - PickOrange の学習済みポリシーは GPU 物理のデータで学習されているが、CPU 物理での成功率は 20/30 で、劣化は見られなかった（docs/evaluation.md）。
 
 ## 5. Dockerfile・実行環境の再設計（D1〜D13）
 
