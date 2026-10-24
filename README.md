@@ -38,7 +38,10 @@ make check                 # 動作確認一式。結果は RESULT: PASS / FAIL 
 make down                  # 推論サーバなど、常駐しているものを止める
 ```
 
-マシンごとの設定（VRAM の節約、操作デバイス、推論の設定など）は `.env` に書きます。`cp .env.example .env` で作り、`make config` で実際に使われる値を確認できます。
+設定は `.env` とコマンドラインで指定します（優先順位: コマンドライン > `.env` > 既定値。シェルの環境変数は使いません）。`cp .env.example .env` で作り、`make config` で実際に使われる値を確認できます。
+
+- sim の設定はすべてのタスクで共通です。既定は VRAM 12GB 向けで、物理演算を CPU で行い、テクスチャの予算を絞っています（`SIM_DEVICE=cpu TEX_BUDGET=0.2`）。VRAM に余裕がある環境では `.env` で変えられます。
+- 記録時の設定は `data/datasets/<name>.sim.env` に残ります。記録したときと `SIM_DEVICE` が違うと、再生と追記は止まります（`FORCE=1` で続行）。
 
 sim は常駐させず、`make` のコマンドごとに使い捨てのコンテナで実行します。実行中のものを強制終了するときは `make stop` です。
 
@@ -53,8 +56,8 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `assets` | `assets.json` のアセットと学習済みポリシーを取得してハッシュで検証する。`GROUP=pick-orange` や `GROUP=lekiwi` で絞れる |
 | `down` / `stop` | 常駐しているサービスを止める / 実行中の sim のコマンドを強制終了する |
 | `list-envs` | タスクの一覧を表示する |
-| `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx` |
-| `teleop-lekiwi` | LeKiwi をテレオペする。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する。VRAM を抑えるため、LeKiwi は既定で物理演算を CPU で行う（`LOW_VRAM=1` の既定。`.env` の `LOW_VRAM=0` で GPU 物理に戻せる。再生も記録時と同じ設定で行う。docs/decisions.md） |
+| `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx`。再生は記録時と `SIM_DEVICE` が違えば止まる（`FORCE=1` で続行） |
+| `teleop-lekiwi` / `replay-lekiwi` | LeKiwi 用の別名。`TASK` を LeKiwi にし、`DEVICE=keyboard` / `gamepad` を LeKiwi 用に読み替えて teleop / replay を実行する。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `eval` | 閉ループ推論を実行する |
 | `config` | `.env` とコマンドラインを反映した、実際に使われる設定を表示する |

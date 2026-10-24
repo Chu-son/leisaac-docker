@@ -39,7 +39,7 @@ LeIsaac の推論は、sim がクライアントとなり、ZMQ でポリシー�
   - `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` を設定する。
 - 実測のピークは 11.4GB / 12.2GB で、余裕はほとんどない。VRAM が足りなくなった場合は、gr00t サービスを別のマシンに移す。その場合は sim 側の `--policy_host` を変えるだけで済む。
 
-### LeKiwi は物理演算を CPU にし、テクスチャの予算を絞る（2026-10-24 の計測）
+### sim は物理演算を CPU にし、テクスチャの予算を絞る（全タスク共通。2026-10-24 の計測）
 
 - LeKiwi（Loft シーン）は、既定の設定だと sim だけで VRAM のピークが 11.4GB / 12.2GB（GUI のテレオペ時）になり、ブラウザを開いていると OOM になった。GR00T は起動していない。
 - 計測方法: ゼロ action またはテレオペ（記録なし）で起動し、`nvidia-smi` を 1 秒ごとに記録した。値はデスクトップ分（約 1.0GB）を含む GPU 全体の使用量。
@@ -54,11 +54,13 @@ LeIsaac の推論は、sim がクライアントとなり、ZMQ でポリシー�
 | CPU 物理 + テクスチャ予算 0.2 + performance | — | 5.8GB |
 | 参考: PickOrange（GPU 物理） | 6.2GB | — |
 
-- 決定: `LOW_VRAM=1`（既定）のとき、`TASK` が `LOW_VRAM_TASKS`（LeKiwi）なら `SIM_DEVICE=cpu`、`TEX_BUDGET=0.2` にする。VRAM に余裕がある環境では、`.env` に `LOW_VRAM=0` と書けば GPU 物理に戻る。個別の値は `.env` やコマンドラインで上書きできる。performance は効果が小さく、画質が変わるので使わない。
+- 決定: すべてのタスクで `SIM_DEVICE=cpu`、`TEX_BUDGET=0.2` を既定にする。タスクごとの例外は作らない（設定がタスクによって変わると、記録・再生・評価の条件を追いにくくなるため）。VRAM に余裕がある環境では、`.env` に `SIM_DEVICE=cuda` と `TEX_BUDGET=`（空）を書けば、GPU 物理と Kit の既定に戻る。performance は効果が小さく、画質が変わるので使わない。
+- 設定の入り口は `.env` とコマンドラインだけにする（優先順位: コマンドライン > `.env` > 既定値）。make は `-include` した `.env` の値を環境変数より優先し、compose は逆に環境変数を優先するため、シェルの環境変数での指定はサポートしない。compose が参照する変数（`POLICY_DIR` など）は make が export し、make と compose で同じ値になるようにしている。
+- 記録時の設定は `data/datasets/<name>.sim.env` に残し、追記（`RESUME=1`）と再生のときに `SIM_DEVICE` を照合する。違えば止める（`FORCE=1` で続行）。`TEX_BUDGET` は描画だけに効き、再生する action には影響しないので、記録するが照合しない。
 - 効果が大きいのは、Loft の大量のコリジョンメッシュを GPU の PhysX に載せなくなること。テクスチャ予算は、CPU 物理と組み合わせたときに効く（GPU 物理のままではほとんど減らない）。カメラ画像（front / wrist）を比べた限りでは、画質の差は見られなかった。
 - 副作用:
   - Loft の飾りの紙箱（`PaperEN/Box001`）は変形体（deformable）で、CPU 物理では扱えないため動かない（起動時にエラーが出るが、続行する）。タスクで使うティッシュ（`Tissue005`）は剛体なので、影響はない。
-  - 物理演算の結果は GPU と CPU で一致しない。記録したときと同じ `SIM_DEVICE` で再生する。10/24 より前に GPU で記録したデータは、`SIM_DEVICE=cuda` で再生しないと結果がずれる。ただし、記録が大きいと、下記の理由で 12GB には収まらない。その場合は CPU で記録し直す。
+  - 物理演算の結果は GPU と CPU で一致しない。記録したときと同じ `SIM_DEVICE` で再生する（上の照合で守る）。10/24 より前に GPU で記録したデータ（`demo.hdf5`、`lekiwi_test.hdf5`）には `.sim.env` がなく、再生時に警告が出る。`SIM_DEVICE=cuda` で再生しないと結果がずれるが、記録が大きいと下記の理由で 12GB に収まらない。その場合は CPU で記録し直す。
   - replay は、エピソード全体（カメラ画像を含む）を `--device` に読み込む。GPU 物理だと、1.4GB の記録の再生で CUDA OOM になった。CPU 物理なら読み込み先はホストの RAM になる（再生時のピークは VRAM 5.9GB、RAM 19.2GB）。
   - CPU 物理のほうが、ステップは速い（ヘッドレスで約 2.7 倍）。
 
