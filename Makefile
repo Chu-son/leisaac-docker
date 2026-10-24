@@ -1,5 +1,9 @@
 SHELL := /bin/bash
 
+# マシンごとの設定は .env に書く (.env.example を参照。git には含めない)。
+# 優先順位: make のコマンドライン > 環境変数 > .env > 下の既定値。compose も同じ .env を読む
+-include .env
+
 TASK        ?= LeIsaac-SO101-PickOrange-v0
 DEVICE      ?= keyboard
 DATASET     ?= demo
@@ -26,17 +30,20 @@ SIM_RUN       = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) sim python
 DATASET_PATH := data/datasets/$(DATASET).hdf5
 DATASET_FILE := /workspace/$(DATASET_PATH)
 # LeKiwi (Loft) は既定の設定だと VRAM を約 10GB 使い、12GB では OOM になる。
-# 物理演算を CPU にし、テクスチャストリーミングの予算を絞ると約 5GB に収まる (docs/decisions.md)。
+# LOW_VRAM=1 のとき、LOW_VRAM_TASKS は物理演算を CPU にし、テクスチャストリーミングの予算を絞る
+# (約 6GB に収まる。docs/decisions.md)。VRAM に余裕がある環境では LOW_VRAM=0 にする。
 # 記録と再生で物理演算のデバイスを揃えること (結果が一致しない)
-LOW_VRAM_TASKS := LeIsaac-LeKiwi-CleanupTrash-v0
-SIM_DEVICE ?= $(if $(filter $(LOW_VRAM_TASKS),$(TASK)),cpu,cuda)
-TEX_BUDGET ?= $(if $(filter $(LOW_VRAM_TASKS),$(TASK)),0.2)
+LOW_VRAM       ?= 1
+LOW_VRAM_TASKS ?= LeIsaac-LeKiwi-CleanupTrash-v0
+LOW_VRAM_ON     = $(and $(filter 1,$(LOW_VRAM)),$(filter $(LOW_VRAM_TASKS),$(TASK)))
+SIM_DEVICE ?= $(if $(LOW_VRAM_ON),cpu,cuda)
+TEX_BUDGET ?= $(if $(LOW_VRAM_ON),0.2)
 SIM_ARGS    = --device=$(SIM_DEVICE) \
 	$(if $(TEX_BUDGET),--kit_args="--/rtx-transient/resourcemanager/texturestreaming/memoryBudget=$(TEX_BUDGET)")
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help build down stop shell-sim shell-gr00t xhost list-envs teleop replay teleop-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs teleop replay teleop-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -49,13 +56,23 @@ help:
 	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生"
 	@echo "  teleop-lekiwi    LeKiwi のテレオペ (DEVICE=keyboard|gamepad|lekiwi-leader)"
-	@echo "                   LeKiwi は既定で SIM_DEVICE=cpu TEX_BUDGET=0.2 (VRAM 節約)。GPU 物理で記録したデータの再生は SIM_DEVICE=cuda"
+	@echo "                   LOW_VRAM=1 (既定) では SIM_DEVICE=cpu TEX_BUDGET=0.2。.env の LOW_VRAM=0 で無効"
 	@echo "  assets           アセットと学習済みポリシーの取得・検証 (GROUP=pick-orange|lekiwi。Loft は手動配置)"
 	@echo "  gr00t-up/-down   GR00T N1.5 推論サーバの起動 (healthy まで待つ) / 停止"
 	@echo "  eval             閉ループ推論 (HEADLESS=0 で GUI 表示)"
+	@echo "  config           実際に使われる設定の表示 (.env とコマンドラインを反映)"
 	@echo "  check            動作確認一式 (タスク一覧 / サーバ疎通 / 推論 1 ラウンド / VRAM ピーク)"
 	@echo "  lock / lock-check  docker/envs/*/uv.lock の更新 / 最新であることの確認"
 	@echo "  shell-sim / shell-gr00t / xhost"
+
+# 実際に使われる設定を表示する (.env とコマンドラインの指定を反映した値)
+config:
+	@echo "TASK=$(TASK)  DEVICE=$(DEVICE)  DATASET=$(DATASET)  RESUME=$(RESUME)"
+	@echo "HEADLESS=$(HEADLESS)  EVAL_ROUNDS=$(EVAL_ROUNDS)  LEADER_PORT=$(LEADER_PORT)"
+	@echo "LOW_VRAM=$(LOW_VRAM)  LOW_VRAM_TASKS=$(LOW_VRAM_TASKS)"
+	@echo "SIM_DEVICE=$(SIM_DEVICE)  TEX_BUDGET=$(if $(TEX_BUDGET),$(TEX_BUDGET),(Kit の既定 0.6))"
+	@echo "POLICY_DIR=$(or $(POLICY_DIR),(compose の既定))  GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose の既定))"
+	@echo ".env: $(if $(wildcard .env),あり,なし)"
 
 build:
 	$(COMPOSE) --profile inference build

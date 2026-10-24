@@ -6,6 +6,7 @@ LeIsaac（Isaac Sim + IsaacLab）と GR00T N1.5 の推論サーバを Docker で
 - `docker/Dockerfile`: multi-stage 構成。`base` から `sim`（Isaac Sim + leisaac）と `gr00t`（推論サーバ）を作る。
 - `docker/envs/{sim,gr00t}/`: Python 依存の宣言（pyproject.toml）と固定（uv.lock）。
 - `assets.json`: 外部リソース（USD アセット、学習済みポリシー）の取得元とハッシュ。`make assets` で取得・検証する。新しいアセットを使うときはここに追記する。
+- `.env.example`: マシンごとの設定（`LOW_VRAM` など）の雛形。`.env` は Makefile と compose の両方が読み、git には含めない。設定を足したらここにも書く。
 - `compose.yaml`: サービスの定義と、git の ref（`x-versions`）。`gr00t` は profile `inference` に属する。
 - `tools/`: gr00t イメージに含まれ、`/opt/tools` に置かれる。check.sh だけはホストで実行する。
 - 操作はすべて `make` で行う。ターゲットの一覧は `make help` で表示できる。

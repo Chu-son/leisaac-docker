@@ -54,7 +54,7 @@ LeIsaac の推論は、sim がクライアントとなり、ZMQ でポリシー�
 | CPU 物理 + テクスチャ予算 0.2 + performance | — | 5.8GB |
 | 参考: PickOrange（GPU 物理） | 6.2GB | — |
 
-- 決定: `TASK` が LeKiwi のときは、`SIM_DEVICE=cpu`、`TEX_BUDGET=0.2` を既定にする（Makefile の `LOW_VRAM_TASKS`）。どちらもコマンドラインで上書きできる。performance は効果が小さく、画質が変わるので使わない。
+- 決定: `LOW_VRAM=1`（既定）のとき、`TASK` が `LOW_VRAM_TASKS`（LeKiwi）なら `SIM_DEVICE=cpu`、`TEX_BUDGET=0.2` にする。VRAM に余裕がある環境では、`.env` に `LOW_VRAM=0` と書けば GPU 物理に戻る。個別の値は `.env` やコマンドラインで上書きできる。performance は効果が小さく、画質が変わるので使わない。
 - 効果が大きいのは、Loft の大量のコリジョンメッシュを GPU の PhysX に載せなくなること。テクスチャ予算は、CPU 物理と組み合わせたときに効く（GPU 物理のままではほとんど減らない）。カメラ画像（front / wrist）を比べた限りでは、画質の差は見られなかった。
 - 副作用:
   - Loft の飾りの紙箱（`PaperEN/Box001`）は変形体（deformable）で、CPU 物理では扱えないため動かない（起動時にエラーが出るが、続行する）。タスクで使うティッシュ（`Tissue005`）は剛体なので、影響はない。

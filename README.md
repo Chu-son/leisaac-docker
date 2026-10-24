@@ -38,6 +38,8 @@ make check                 # 動作確認一式。結果は RESULT: PASS / FAIL 
 make down                  # 推論サーバなど、常駐しているものを止める
 ```
 
+マシンごとの設定（VRAM の節約、操作デバイス、推論の設定など）は `.env` に書きます。`cp .env.example .env` で作り、`make config` で実際に使われる値を確認できます。
+
 sim は常駐させず、`make` のコマンドごとに使い捨てのコンテナで実行します。実行中のものを強制終了するときは `make stop` です。
 
 - 初回の起動では、シェーダのキャッシュを作るのに数分かかります。
@@ -52,9 +54,10 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `down` / `stop` | 常駐しているサービスを止める / 実行中の sim のコマンドを強制終了する |
 | `list-envs` | タスクの一覧を表示する |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx` |
-| `teleop-lekiwi` | LeKiwi をテレオペする。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する。VRAM を抑えるため、LeKiwi は既定で物理演算を CPU で行う（`SIM_DEVICE=cpu TEX_BUDGET=0.2`。再生も同じ設定で行う。docs/decisions.md） |
+| `teleop-lekiwi` | LeKiwi をテレオペする。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する。VRAM を抑えるため、LeKiwi は既定で物理演算を CPU で行う（`LOW_VRAM=1` の既定。`.env` の `LOW_VRAM=0` で GPU 物理に戻せる。再生も記録時と同じ設定で行う。docs/decisions.md） |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `eval` | 閉ループ推論を実行する |
+| `config` | `.env` とコマンドラインを反映した、実際に使われる設定を表示する |
 | `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、VRAM ピークを確認する |
 | `lock` / `lock-check` | `docker/envs/*/uv.lock` を更新する / 最新であることを確認する |
 | `shell-sim` / `shell-gr00t` | コンテナのシェルに入る |
