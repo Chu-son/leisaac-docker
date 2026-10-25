@@ -103,4 +103,5 @@ docs/
 - [docs/troubleshooting.md](docs/troubleshooting.md): 実際に起きた問題と対処
 - [docs/evaluation.md](docs/evaluation.md): 推論評価の内容と、結果の判定方法
 - [docs/manual-tasks.md](docs/manual-tasks.md): 手作業のチェックリスト
+- [docs/lekiwi-learning.md](docs/lekiwi-learning.md): LeKiwi の学習と推論の調査結果と選択肢（Phase 4 の判断材料）
 - [AGENTS.md](AGENTS.md): コーディングエージェント向けの要点
