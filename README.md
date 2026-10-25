@@ -56,12 +56,13 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `assets` | `assets.json` のアセットと学習済みポリシーを取得してハッシュで検証する。`GROUP=pick-orange` や `GROUP=lekiwi` で絞れる |
 | `down` / `stop` | 常駐しているサービスを止める / 実行中の sim のコマンドを強制終了する |
 | `list-envs` | タスクの一覧を表示する |
+| `smoke` | `TASK` をヘッドレスで作り、ゼロ action で数ステップ動かす（起動確認。`DEVICE` で action の構成を選ぶ） |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx`。再生は記録時と `SIM_DEVICE` が違えば止まる（`FORCE=1` で続行） |
 | `teleop-lekiwi` / `replay-lekiwi` | LeKiwi 用の別名。`TASK` を LeKiwi にし、`DEVICE=keyboard` / `gamepad` を LeKiwi 用に読み替えて teleop / replay を実行する。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `eval` | 閉ループ推論を実行する |
 | `config` | `.env` とコマンドラインを反映した、実際に使われる設定を表示する |
-| `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、VRAM ピークを確認する |
+| `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、LeKiwi の起動（Loft がなければ SKIP）、VRAM ピークを確認する |
 | `lock` / `lock-check` | `docker/envs/*/uv.lock` を更新する / 最新であることを確認する |
 | `shell-sim` / `shell-gr00t` | コンテナのシェルに入る |
 
@@ -87,6 +88,7 @@ docker/
 tools/
   gr00t_server.py     # VRAM 節約のラッパーを付けて GR00T の推論サーバを起動する
   probe_gr00t.py      # サーバとの疎通と action の形状を確認する
+  sim_smoke.py        # make smoke の本体（タスクを作り、ゼロ action で数ステップ動かす）
   fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
 data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）

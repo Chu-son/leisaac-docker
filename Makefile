@@ -74,7 +74,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -83,6 +83,7 @@ help:
 	@echo "  build            sim / gr00t イメージをビルド"
 	@echo "  down / stop      全サービスの停止 / 実行中の sim コマンドの強制終了"
 	@echo "  list-envs        登録済みタスク一覧"
+	@echo "  smoke            TASK をヘッドレスで作り、ゼロ action で数ステップ動かす (起動確認)"
 	@echo "  teleop           テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE) -> $(DATASET_PATH)。追記は RESUME=1)"
 	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生 (記録時と SIM_DEVICE が違えば止める。FORCE=1 で続行)"
@@ -113,7 +114,7 @@ down:
 
 # Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
 stop:
-	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-shell >/dev/null 2>&1
+	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-shell >/dev/null 2>&1
 
 shell-sim:
 	$(COMPOSE) run --rm $(TTY_FLAG) --name leisaac-shell sim bash
@@ -127,6 +128,11 @@ xhost:
 
 list-envs:
 	$(call SIM_RUN,leisaac-list-envs) scripts/environments/list_envs.py
+
+# sim の起動確認。TASK を DEVICE の action 構成で作り、ヘッドレスでゼロ action を数ステップ流す
+smoke:
+	$(call SIM_RUN,leisaac-smoke) /opt/tools/sim_smoke.py \
+		--task=$(TASK) --teleop_device=$(DEVICE) $(SIM_ARGS) --enable_cameras --headless
 
 # leisaac は既存のデータセットがあると停止する。上書きも暗黙の追記もしないよう、先に確認する
 teleop:

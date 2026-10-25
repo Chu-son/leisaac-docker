@@ -5,6 +5,8 @@
 #   2. gr00t: 推論サーバが healthy になり、action の形状が leisaac クライアントと一致すること
 #   3. sim + gr00t: PickOrange をヘッドレスで 1 ラウンド推論し、最後まで完走すること (成功率と VRAM ピークは記録のみ)
 #      ポリシーの成功率はばらつくため合否に使わない。性能は make eval EVAL_ROUNDS=10 で測る
+#   4. sim: LeKiwi をヘッドレスで作り、ゼロ action で動かせること (VRAM ピークは記録のみ)。
+#      Loft シーン (make assets GROUP=lekiwi) がなければ SKIP
 # sim は make 経由で動かすので、sim の設定 (SIM_DEVICE など) は .env に従う。
 # タスクとポリシーは、基準となる構成 (PickOrange) をコマンドラインで固定する
 set -uo pipefail
@@ -21,17 +23,19 @@ REF=(TASK=LeIsaac-SO101-PickOrange-v0 "INSTRUCTION=Pick up the orange and place 
 mk() { make --no-print-directory "$@" < /dev/null; }
 mk -s config "${REF[@]}" > "$LOG_DIR/config.log"
 step() { printf '\n=== %s\n' "$*"; }
+# nvidia-smi で VRAM 使用量 (MiB) を 1 秒ごとに $1 へ記録する。止めるときは kill $mon
+monitor_vram() { ( while true; do nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits; sleep 1; done ) > "$1" 2>/dev/null & mon=$!; }
 ok()   { printf '  [OK] %s\n' "$*"; }
 ng()   { printf '  [NG] %s\n' "$*"; fail=1; }
 
-step "0/3 アセットとポリシー (assets.json)"
+step "0/4 アセットとポリシー (assets.json)"
 if python3 tools/fetch_assets.py --check --group pick-orange > "$LOG_DIR/assets.log" 2>&1; then
     ok "pick-orange のアセットとポリシーが揃っている"
 else
     ng "足りない、または内容が異なる ($LOG_DIR/assets.log)。make assets GROUP=pick-orange で取得できる"
 fi
 
-step "1/3 sim: タスク一覧"
+step "1/4 sim: タスク一覧"
 if mk list-envs > "$LOG_DIR/list_envs.log" 2>&1 \
    && grep -q "LeIsaac-SO101-PickOrange-v0" "$LOG_DIR/list_envs.log" \
    && grep -q "LeIsaac-LeKiwi-CleanupTrash-v0" "$LOG_DIR/list_envs.log"; then
@@ -40,7 +44,7 @@ else
     ng "タスク一覧の取得に失敗 ($LOG_DIR/list_envs.log)"
 fi
 
-step "2/3 gr00t: 推論サーバ"
+step "2/4 gr00t: 推論サーバ"
 if mk gr00t-up "${REF[@]}" > "$LOG_DIR/gr00t_up.log" 2>&1; then
     ok "healthy"
     if docker compose --profile inference exec -T gr00t python /opt/tools/probe_gr00t.py > "$LOG_DIR/probe.log" 2>&1; then
@@ -52,10 +56,9 @@ else
     ng "サーバが healthy にならない (docker compose --profile inference logs gr00t)"
 fi
 
-step "3/3 閉ループ推論 (PickOrange, ヘッドレス, 1 ラウンド)"
+step "3/4 閉ループ推論 (PickOrange, ヘッドレス, 1 ラウンド)"
 if [ $fail -eq 0 ]; then
-    ( while true; do nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits; sleep 1; done ) > "$LOG_DIR/vram.log" 2>/dev/null &
-    mon=$!
+    monitor_vram "$LOG_DIR/vram.log"
     timeout 900 make --no-print-directory eval "${REF[@]}" EVAL_ROUNDS=1 HEADLESS=1 < /dev/null > "$LOG_DIR/eval.log" 2>&1
     kill $mon 2>/dev/null
     # タイムアウトや異常終了のあとも Kit が残ることがあるため、コンテナごと確実に止める
@@ -68,6 +71,23 @@ else
 fi
 
 docker compose --profile inference stop gr00t >/dev/null 2>&1
+
+step "4/4 sim: LeKiwi の起動 (ヘッドレス, ゼロ action)"
+if ! python3 tools/fetch_assets.py --check --group lekiwi > "$LOG_DIR/assets_lekiwi.log" 2>&1; then
+    echo "  [SKIP] LeKiwi のアセットがない ($LOG_DIR/assets_lekiwi.log)。make assets GROUP=lekiwi で取得できる"
+else
+    monitor_vram "$LOG_DIR/vram_lekiwi.log"
+    timeout 900 make --no-print-directory smoke TASK=LeIsaac-LeKiwi-CleanupTrash-v0 DEVICE=lekiwi-keyboard < /dev/null > "$LOG_DIR/smoke_lekiwi.log" 2>&1
+    kill $mon 2>/dev/null
+    docker rm -f leisaac-smoke >/dev/null 2>&1
+    peak=$(sort -n "$LOG_DIR/vram_lekiwi.log" | tail -1)
+    if grep -q "SMOKE OK" "$LOG_DIR/smoke_lekiwi.log"; then
+        ok "$(grep -o 'steps=.*' "$LOG_DIR/smoke_lekiwi.log") / VRAM ピーク ${peak} MiB"
+    else
+        ng "起動または実行に失敗 / VRAM ピーク ${peak} MiB ($LOG_DIR/smoke_lekiwi.log)"
+    fi
+fi
+
 printf '\nログ: %s\n' "$LOG_DIR"
 [ $fail -eq 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit $fail

@@ -88,6 +88,8 @@ RUN mkdir -p /opt/venv/lib/python3.11/site-packages/isaacsim/kit/cache \
         /workspace/leisaac/source/leisaac/leisaac/devices/lerobot/.cache \
         /workspace/leisaac/assets /workspace/data
 
+COPY --chown=dev:dev tools/ /opt/tools/
+
 WORKDIR /workspace/leisaac
 CMD ["bash"]
 

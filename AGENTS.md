@@ -9,7 +9,7 @@ LeIsaac（Isaac Sim + IsaacLab）と GR00T N1.5 の推論サーバを Docker で
 - `.env.example`: 設定の雛形。設定の入り口は `.env` とコマンドラインだけ（優先順位: コマンドライン > `.env` > 既定値）。`.env` は Makefile と compose の両方が読み、git には含めない。Makefile に変数を足したら、ここと `make config` にも書く。compose が参照する変数は Makefile で export する。
 - sim の設定（`SIM_DEVICE` など）は全タスクで共通にする。タスクごとの例外を作らない。
 - `compose.yaml`: サービスの定義と、git の ref（`x-versions`）。`gr00t` は profile `inference` に属する。
-- `tools/`: gr00t イメージに含まれ、`/opt/tools` に置かれる。check.sh だけはホストで実行する。
+- `tools/`: sim と gr00t の両方のイメージに含まれ、`/opt/tools` に置かれる（変更したら `make build`）。check.sh と fetch_assets.py はホストで実行する。
 - 操作はすべて `make` で行う。ターゲットの一覧は `make help` で表示できる。
 
 ## 不変条件（壊さないこと）
