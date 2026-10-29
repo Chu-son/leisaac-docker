@@ -7,6 +7,8 @@
 #      ポリシーの成功率はばらつくため合否に使わない。性能は make eval EVAL_ROUNDS=10 で測る
 #   4. sim: LeKiwi をヘッドレスで作り、ゼロ action で動かせること (VRAM ピークは記録のみ)。
 #      Loft シーン (make assets GROUP=lekiwi) がなければ SKIP
+#   5. sim: Sweep タスクの確認 (make sweep-check。contract と上流の一致、配置、成功判定)。
+#      front と wrist の画像をログに残す。LeKiwi のアセットがなければ SKIP
 # sim は make 経由で動かすので、sim の設定 (SIM_DEVICE など) は .env に従う。
 # タスクとポリシーは、基準となる構成 (PickOrange) をコマンドラインで固定する
 set -uo pipefail
@@ -28,23 +30,24 @@ monitor_vram() { ( while true; do nvidia-smi --query-gpu=memory.used --format=cs
 ok()   { printf '  [OK] %s\n' "$*"; }
 ng()   { printf '  [NG] %s\n' "$*"; fail=1; }
 
-step "0/4 アセットとポリシー (assets.json)"
+step "0/5 アセットとポリシー (assets.json)"
 if python3 tools/fetch_assets.py --check --group pick-orange > "$LOG_DIR/assets.log" 2>&1; then
     ok "pick-orange のアセットとポリシーが揃っている"
 else
     ng "足りない、または内容が異なる ($LOG_DIR/assets.log)。make assets GROUP=pick-orange で取得できる"
 fi
 
-step "1/4 sim: タスク一覧"
+step "1/5 sim: タスク一覧"
 if mk list-envs > "$LOG_DIR/list_envs.log" 2>&1 \
    && grep -q "LeIsaac-SO101-PickOrange-v0" "$LOG_DIR/list_envs.log" \
-   && grep -q "LeIsaac-LeKiwi-CleanupTrash-v0" "$LOG_DIR/list_envs.log"; then
-    ok "$(grep -c '| LeIsaac-' "$LOG_DIR/list_envs.log") タスク (PickOrange / LeKiwi を含む)"
+   && grep -q "LeIsaac-LeKiwi-CleanupTrash-v0" "$LOG_DIR/list_envs.log" \
+   && grep -q "LeIsaac-LeKiwi-Sweep-Floor-v0" "$LOG_DIR/list_envs.log"; then
+    ok "$(grep -c '| LeIsaac-' "$LOG_DIR/list_envs.log") タスク (PickOrange / LeKiwi / Sweep を含む)"
 else
     ng "タスク一覧の取得に失敗 ($LOG_DIR/list_envs.log)"
 fi
 
-step "2/4 gr00t: 推論サーバ"
+step "2/5 gr00t: 推論サーバ"
 if mk gr00t-up "${REF[@]}" > "$LOG_DIR/gr00t_up.log" 2>&1; then
     ok "healthy"
     if docker compose --profile inference exec -T gr00t python /opt/tools/probe_gr00t.py > "$LOG_DIR/probe.log" 2>&1; then
@@ -56,7 +59,7 @@ else
     ng "サーバが healthy にならない (docker compose --profile inference logs gr00t)"
 fi
 
-step "3/4 閉ループ推論 (PickOrange, ヘッドレス, 1 ラウンド)"
+step "3/5 閉ループ推論 (PickOrange, ヘッドレス, 1 ラウンド)"
 if [ $fail -eq 0 ]; then
     monitor_vram "$LOG_DIR/vram.log"
     timeout 900 make --no-print-directory eval "${REF[@]}" EVAL_ROUNDS=1 HEADLESS=1 < /dev/null > "$LOG_DIR/eval.log" 2>&1
@@ -72,7 +75,7 @@ fi
 
 docker compose --profile inference stop gr00t >/dev/null 2>&1
 
-step "4/4 sim: LeKiwi の起動 (ヘッドレス, ゼロ action)"
+step "4/5 sim: LeKiwi の起動 (ヘッドレス, ゼロ action)"
 if ! python3 tools/fetch_assets.py --check --group lekiwi > "$LOG_DIR/assets_lekiwi.log" 2>&1; then
     echo "  [SKIP] LeKiwi のアセットがない ($LOG_DIR/assets_lekiwi.log)。make assets GROUP=lekiwi で取得できる"
 else
@@ -85,6 +88,25 @@ else
         ok "$(grep -o 'steps=.*' "$LOG_DIR/smoke_lekiwi.log") / VRAM ピーク ${peak} MiB"
     else
         ng "起動または実行に失敗 / VRAM ピーク ${peak} MiB ($LOG_DIR/smoke_lekiwi.log)"
+    fi
+fi
+
+step "5/5 sim: Sweep タスクの確認 (ヘッドレス)"
+if ! python3 tools/fetch_assets.py --check --group lekiwi > /dev/null 2>&1; then
+    echo "  [SKIP] LeKiwi のアセットがない ($LOG_DIR/assets_lekiwi.log)"
+else
+    monitor_vram "$LOG_DIR/vram_sweep.log"
+    timeout 900 make --no-print-directory sweep-check < /dev/null > "$LOG_DIR/sweep_check.log" 2>&1
+    kill $mon 2>/dev/null
+    docker rm -f leisaac-sweep-check >/dev/null 2>&1
+    peak=$(sort -n "$LOG_DIR/vram_sweep.log" | tail -1)
+    cp data/sweep/check/front.png "$LOG_DIR/sweep_front.png" 2>/dev/null
+    cp data/sweep/check/wrist.png "$LOG_DIR/sweep_wrist.png" 2>/dev/null
+    if grep -q "SWEEP CHECK OK" "$LOG_DIR/sweep_check.log"; then
+        ok "$(grep -o '([0-9.]*s, .*)' "$LOG_DIR/sweep_check.log" | tail -1) / VRAM ピーク ${peak} MiB / 画像 $LOG_DIR/sweep_{front,wrist}.png"
+    else
+        grep "\[NG\]" "$LOG_DIR/sweep_check.log" | sed 's/^ */  /'
+        ng "確認に失敗 / VRAM ピーク ${peak} MiB ($LOG_DIR/sweep_check.log)"
     fi
 fi
 
