@@ -14,7 +14,7 @@
 | LeRobot / OpenPI のポリシーでの推論 | **未対応** | クライアント（`service_policy_clients.py`）の観測と action の組み立てが、`so101leader` 用しかない |
 | GR00T の data config | **ない** | Isaac-GR00T `4af2b62` の data config は `so100`、`so100_dualcam` などで、LeKiwi 用はない |
 
-env の action の構成は操作デバイスで変わる（`lekiwi-keyboard` では 11 次元で、`arm_action` 6、`gripper_action` 2、`wheel_action` 3）。LeRobot 形式に変換すると、state と action はどちらも「アームの関節位置 6 + 台車の速度 3」になる（`build_lerobot_frame`）。
+env の action の構成は操作デバイスで変わる（`lekiwi-keyboard` では 11 次元で、`arm_action` 6、`gripper_action` 2、`wheel_action` 3）。LeRobot 形式に変換すると、state と action はどちらも「アームの関節位置 6 + 台車の速度 3」になる（`build_lerobot_frame`）。ただし、state のアームの取り出し方に不具合があると考えられる（sim の関節の並びは台車が先頭なのに、`joint_pos[:-3]` をアームとして扱っている。sweep.md）。
 
 ## 自前で作る必要があるもの
 

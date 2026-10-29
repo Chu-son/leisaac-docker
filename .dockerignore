@@ -2,3 +2,5 @@
 *
 !docker/
 !tools/
+# Python のキャッシュは送らない
+**/__pycache__

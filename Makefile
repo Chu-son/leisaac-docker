@@ -43,9 +43,9 @@ LEADER_DEVICES := so101leader lekiwi-leader
 COMPOSE        := docker compose -f compose.yaml $(if $(filter $(LEADER_DEVICES),$(DEVICE)),-f compose.leader.yaml)
 
 # sim はコマンドごとに使い捨てのコンテナで実行する (コンテナ内に状態を残さない)。
-# 端末から実行したときだけ TTY を割り当てる
+# 端末から実行したときだけ TTY を割り当てる。スクリプトは自前のタスクを登録するラッパーを通して実行する
 TTY_FLAG     := $(if $(shell test -t 0 && echo y),,-T)
-SIM_RUN       = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) sim python
+SIM_RUN       = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) sim python /opt/tools/leisaac_run.py
 SIM_ARGS      = --device=$(SIM_DEVICE) \
 	$(if $(TEX_BUDGET),--kit_args="--/rtx-transient/resourcemanager/texturestreaming/memoryBudget=$(TEX_BUDGET)")
 DATASET_PATH := data/datasets/$(DATASET).hdf5

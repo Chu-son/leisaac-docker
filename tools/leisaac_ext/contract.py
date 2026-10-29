@@ -6,6 +6,7 @@ isaaclab も lerobot も import しない (numpy だけ)。sim と train の両�
     台車:   x.vel (前進, m/s)、y.vel (左, m/s)、theta.vel (反時計回り, deg/s)。ロボット基準
 sim の env の action (lekiwi-leader の構成、9 次元) との対応:
     [0:5] アームの関節位置 (rad)、[5] グリッパ (rad)、[6:9] 台車の速度 (x と y はワールド座標系、θ は rad/s)
+sim の観測の joint_pos と joint_vel は、articulation の関節の並び (SIM_JOINT_NAMES) で、台車が先に来る。
 詳細と根拠は docs/sweep.md。
 """
 import numpy as np
@@ -21,10 +22,13 @@ CAMERAS = ("front", "wrist")
 IMAGE_SHAPE = (240, 320, 3)  # (高さ, 幅, チャンネル)
 INSTRUCTION = "Sweep the debris into the marked square on the floor"
 
-# sim の関節の並び (joint_pos と joint_vel の 9 次元): アーム 6 + base_x, base_y, base_theta
-BASE_THETA_INDEX = 8
+# sim の articulation の関節の並び (観測の joint_pos と joint_vel の 9 次元)。PhysX が決める並びで、
+# action の並び (アームが先) とは違う。一致は sim の中のテストで確かめる (P2)
+SIM_JOINT_NAMES = ("base_x", "base_y", "base_theta") + ARM_JOINTS
+_ARM_IDX = [SIM_JOINT_NAMES.index(j) for j in ARM_JOINTS]
+_BASE_IDX = [SIM_JOINT_NAMES.index(j) for j in ("base_x", "base_y", "base_theta")]
 
-# 箒を握ったときのグリッパの角度 (rad)。P1 で箒の形状に合わせて決める
+# 箒を握ったときのグリッパの角度 (rad)。0 で、厚さ 12mm の柄がどちらの指にも触れない (broom.py)
 GRIPPER_HOLD_RAD = 0.0
 
 # 上流の leisaac.assets.robots.lerobot と同じ値 (度)。一致は sim の中のテストで確かめる (P2)
@@ -75,13 +79,13 @@ def base_robot_to_world(vel: np.ndarray, theta: np.ndarray) -> np.ndarray:
 def to_lerobot(joint_pos: np.ndarray, joint_vel: np.ndarray, action: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """sim の 1 step 分 (または [N, ...] の系列) を、LeRobot 形式の (state, action) にする
 
-    joint_pos と joint_vel は step の前の観測、action はその step で env に渡した値。
+    joint_pos と joint_vel は step の前の観測 (SIM_JOINT_NAMES の並び)、action はその step で env に渡した値。
     台車の action は、渡した値そのものを観測時の向きで変換する。上流の build_lerobot_frame は
     1 step 後の観測 (user_vel_action) を使うので、ラベルが 1 フレーム遅れる。ここではその遅れがない。
     """
-    theta = joint_pos[..., BASE_THETA_INDEX]
+    theta = joint_pos[..., _BASE_IDX[2]]
     state = np.concatenate(
-        [arm_rad_to_motor(joint_pos[..., :6]), base_world_to_robot(joint_vel[..., 6:9], theta)], axis=-1
+        [arm_rad_to_motor(joint_pos[..., _ARM_IDX]), base_world_to_robot(joint_vel[..., _BASE_IDX], theta)], axis=-1
     )
     act = np.concatenate([arm_rad_to_motor(action[..., :6]), base_world_to_robot(action[..., 6:9], theta)], axis=-1)
     return state.astype(np.float32), act.astype(np.float32)
@@ -89,7 +93,7 @@ def to_lerobot(joint_pos: np.ndarray, joint_vel: np.ndarray, action: np.ndarray)
 
 def from_lerobot_action(action: np.ndarray, joint_pos: np.ndarray) -> np.ndarray:
     """LeRobot 形式の action [..., 9] を、sim の env に渡す action にする (to_lerobot の action の逆)"""
-    theta = joint_pos[..., BASE_THETA_INDEX]
+    theta = joint_pos[..., _BASE_IDX[2]]
     return np.concatenate(
         [arm_motor_to_rad(action[..., :6]), base_robot_to_world(action[..., 6:9], theta)], axis=-1
     ).astype(np.float32)

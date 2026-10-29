@@ -89,7 +89,8 @@ tools/
   gr00t_server.py     # VRAM 節約のラッパーを付けて GR00T の推論サーバを起動する
   probe_gr00t.py      # サーバとの疎通と action の形状を確認する
   sim_smoke.py        # make smoke の本体（タスクを作り、ゼロ action で数ステップ動かす）
-  leisaac_ext/        # 自前のタスク（Sweep）。contract.py はデータの約束事（docs/sweep.md）
+  leisaac_run.py      # sim のスクリプトを、自前のタスクを登録してから実行するラッパー（sim のコマンドはすべてこれを通る）
+  leisaac_ext/        # 自前のタスク（Sweep）。contract.py はデータの約束事、broom.py は箒付きの LeKiwi（docs/sweep.md）
   fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
 data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）

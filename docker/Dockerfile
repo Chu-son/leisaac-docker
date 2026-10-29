@@ -89,6 +89,8 @@ RUN mkdir -p /opt/venv/lib/python3.11/site-packages/isaacsim/kit/cache \
         /workspace/leisaac/assets /workspace/data
 
 COPY --chown=dev:dev tools/ /opt/tools/
+# 自前のタスク (tools/leisaac_ext) を import できるようにする。uv の path 依存にすると lock とビルドが壊れる
+ENV PYTHONPATH=/opt/tools
 
 WORKDIR /workspace/leisaac
 CMD ["bash"]

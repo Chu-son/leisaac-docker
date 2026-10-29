@@ -10,6 +10,7 @@ LeIsaac（Isaac Sim + IsaacLab）と GR00T N1.5 の推論サーバを Docker で
 - sim の設定（`SIM_DEVICE` など）は全タスクで共通にする。タスクごとの例外を作らない。
 - `compose.yaml`: サービスの定義と、git の ref（`x-versions`）。`gr00t` は profile `inference` に属する。
 - `tools/`: sim と gr00t の両方のイメージに含まれ、`/opt/tools` に置かれる（変更したら `make build`）。check.sh と fetch_assets.py はホストで実行する。
+- sim のスクリプトは、すべて `tools/leisaac_run.py` を通して実行する（Makefile の `SIM_RUN`）。自前のタスク（`tools/leisaac_ext`、PYTHONPATH で読み込む）を登録してから、上流のスクリプトをそのまま実行する。上流のコードは変更しない。
 - 操作はすべて `make` で行う。ターゲットの一覧は `make help` で表示できる。
 
 ## 不変条件（壊さないこと）
