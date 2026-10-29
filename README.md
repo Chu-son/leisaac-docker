@@ -89,6 +89,7 @@ tools/
   gr00t_server.py     # VRAM 節約のラッパーを付けて GR00T の推論サーバを起動する
   probe_gr00t.py      # サーバとの疎通と action の形状を確認する
   sim_smoke.py        # make smoke の本体（タスクを作り、ゼロ action で数ステップ動かす）
+  leisaac_ext/        # 自前のタスク（Sweep）。contract.py はデータの約束事（docs/sweep.md）
   fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
 data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）
@@ -104,4 +105,5 @@ docs/
 - [docs/evaluation.md](docs/evaluation.md): 推論評価の内容と、結果の判定方法
 - [docs/manual-tasks.md](docs/manual-tasks.md): 手作業のチェックリスト
 - [docs/lekiwi-learning.md](docs/lekiwi-learning.md): LeKiwi の学習と推論の調査結果と選択肢（Phase 4 の判断材料）
+- [docs/sweep.md](docs/sweep.md): LeKiwi の掃き掃除タスク（前提、データの約束事、進み具合）
 - [AGENTS.md](AGENTS.md): コーディングエージェント向けの要点
