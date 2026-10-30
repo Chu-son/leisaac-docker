@@ -1,6 +1,7 @@
 # leisaac-docker
 #   sim   : Isaac Sim + LeIsaac (テレオペ / リプレイ / 推論クライアント)。常駐させず、make が run --rm で都度実行する
 #   gr00t : GR00T N1.5 推論サーバ (profile: inference。sim と ZMQ :5555 で通信)
+#   train : LeRobot (記録の変換と学習)。sim と同じく、make が run --rm で都度実行する
 
 # git の ref はここで一括管理する (Python パッケージのバージョンは docker/envs/*/pyproject.toml と uv.lock)。
 # leisaac の GR00T クライアントは特定の Isaac-GR00T commit を前提とするため、LEISAAC_REF と GR00T_REF は必ず組で更新すること。
@@ -76,6 +77,17 @@ services:
       start_period: 180s
       retries: 3
 
+  train:
+    <<: *gpu
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: train
+      args: *versions
+    image: leisaac-train:latest
+    volumes:
+      - ./data:/workspace/data
+
   # make lock 用。ソースを取得した stage で uv lock を実行し、結果を docker/envs/ に書き戻す
   lock-sim:
     profiles: [tools]
@@ -101,6 +113,19 @@ services:
     working_dir: /opt/env/gr00t
     volumes:
       - ./docker/envs/gr00t:/opt/env/gr00t
+    command: ["uv", "lock"]
+
+  lock-train:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: train-src
+      args: *versions
+    image: leisaac-train-src:latest
+    working_dir: /opt/env/train
+    volumes:
+      - ./docker/envs/train:/opt/env/train
     command: ["uv", "lock"]
 
 volumes:

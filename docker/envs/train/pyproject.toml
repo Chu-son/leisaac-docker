@@ -1,0 +1,30 @@
+# train target の Python 環境の定義。依存はここで宣言し、uv.lock (ハッシュ付き) で完全に固定する。
+# lock の生成: make lock  /  ビルド: uv sync --locked (docker/Dockerfile)
+# Sweep タスクの記録 (HDF5) を LeRobot 形式に変換し (make convert)、後でポリシー (ACT など) を学習する。
+# sim には lerobot を入れない (isaacsim が numpy 1.26.0 に固定しているため。docs/sweep.md)
+[project]
+name = "leisaac-train-env"
+version = "0"
+requires-python = "==3.11.*"
+dependencies = [
+    # 実機の LeKiwi のキー名と単位 (tools/leisaac_ext/contract.py) はこの版に合わせている。
+    # extras の lekiwi (feetech-servo-sdk と pyzmq) は、実機の LeKiwi のクラスを作り、contract と照合するため (make check)
+    "lerobot[lekiwi]==0.4.2",
+    # Blackwell (sm_120) には cu128 ビルドが必要。下の sources で index を明示している
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+    "h5py",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

@@ -197,7 +197,7 @@ sim、変換、学習、推論のすべてが、このファイルの定義に�
 | `initial_state/...` | [1, ...] | リセットした直後の状態（replay の始まり） |
 | 属性 `success`、`num_samples` | — | 成功の印（常に True）と、step の数 |
 
-- 学習データへの変換（P5）では、`contract.frame_indices` で 1 step おきに取り出し（30fps）、`contract.to_lerobot` で LeRobot 形式にします。
+- 学習データへの変換（P5、後述の「変換」）では、`contract.frame_indices` で 1 step おきに取り出し（30fps）、`contract.to_lerobot` で LeRobot 形式にします。
 - エピソードの属性 `seed` は書き出されません（isaaclab の RecorderManager は書き出さず、上流の StreamingRecorderManager だけが書き出す）。シードは `summary.json` にあります。
 
 ### 確認のしかた
@@ -250,6 +250,54 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
   - 長い実行の途中から `reset_to` で始めると、PhysX の内部の状態（接触のキャッシュなど）が記録したときと違うためと考えられます。
   - 成功の判定には影響しないので、再現できていると判断しました。
 
+## 変換（`make convert`）
+
+`make convert DATASET=sweep_floor` で、`data/datasets/sweep_floor.hdf5` を LeRobot 形式に変換し、`data/lerobot/sweep_floor/` に出力します。本体は `tools/sweep_convert.py` です。
+
+- train のイメージ（`docker/envs/train`。lerobot 0.4.2、h5py、torch 2.7.0 の cu128）で動かします。Kit も GPU も使いません。
+  - sim の環境に lerobot は入れません。isaacsim が固定している numpy 1.26.0 などと衝突するおそれがあり、sim の環境を変えないためです。
+- 出力先が既にあれば止まります（上書きも追記もしません）。作り直すときは、別の `DATASET` 名で変換するか、`data/lerobot/<名前>/` を消してから実行してください。
+
+### 中身
+
+| 項目 | 内容 |
+|---|---|
+| 形式 | LeRobot v3.0（lerobot 0.4.2 の `LeRobotDataset`）。`repo_id` は `local/<DATASET>`、`robot_type` は `lekiwi_client`（実機の LeKiwi を lerobot で記録したときと同じ） |
+| フレーム | 30fps。60Hz の記録から 1 step おきに取り出す（`contract.frame_indices`） |
+| `observation.state` / `action` | 9 次元の float32。キー名と単位は contract（モータの正規化値と、ロボット基準の台車の速度。`theta.vel` は deg/s） |
+| `observation.images.front` / `.wrist` | 320×240 の動画。lerobot の既定の AV1（libsvtav1、crf 30、GOP 2） |
+| 指示文 | `contract.INSTRUCTION`（全フレームで同じ） |
+| `convert.json` | 変換元、フレームの数、かかった時間、照合の結果（lerobot は読まない） |
+
+読み込むときは、train のイメージで `LeRobotDataset("local/sweep_floor", root="/workspace/data/lerobot/sweep_floor")` とします。
+
+### 照合
+
+変換した後、`LeRobotDataset` で読み直して、すべてのフレームを HDF5 と比べます。最後の行が `SWEEP CONVERT PASS` なら合格です。
+
+- state と action は、ビット単位で一致すること。
+- 画像は、動画の圧縮による差（画素の値 0〜255 の平均絶対誤差）が 4 以下であること。
+- フレームがずれていないこと。
+  - 隣り合うフレームの差（中央値 0.4 程度）は圧縮の差（1.3 程度）より小さいので、誤差の上限だけでは 1 フレームのずれを見分けられません。
+  - そこで、エピソードごとに、同じ番号のフレームとの差が、前後に 1 フレームずらしたときの差より小さいことを確かめます。
+
+`make check` の 6 番目（`tools/train_check.py`）では、ユーザーのデータを使わずに、次の 2 つを確かめます。
+
+- contract のキー名とカメラの名前が、lerobot 0.4.2 の実機の LeKiwi（`LeKiwiClient`）と一致すること。そのために、train には `lerobot[lekiwi]`（feetech-servo-sdk と pyzmq）を入れています。
+- 合成した小さな記録（2 エピソード、動く四角の画像）を変換して、照合が通ること。
+
+### 結果（2026-10-30）
+
+| 項目 | 結果 |
+|---|---|
+| 変換（`make convert DATASET=sweep_floor`） | 50 エピソード、21,676 フレーム。`SWEEP CONVERT PASS` |
+| 時間 | 5.4 分（変換 2.5 分、照合 2.9 分） |
+| 大きさ | 41MB（HDF5 の 1.74GB の約 1/40） |
+| 画像の平均絶対誤差 | front は平均 1.33、最大 2.51。wrist は平均 1.65、最大 2.53 |
+| フレームのずれの検出 | 前後に 1 フレームずらすと、差は 0.1〜0.4 大きくなる（全エピソードで、ずれなし） |
+
+- GR00T N1.5 は LeRobot v2.1 形式を読むので、v3.0 のままでは使えません。GR00T を選んだときは、同じ HDF5 から v2.1 形式で出力する処理を足します（P6 で判断します）。
+
 ## 実機との差（既知）
 
 | 項目 | sim | 実機 | 対応 |
@@ -268,7 +316,7 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
 | sim（床のシーン、ヘッドレス） | 2.9〜3.3GB（実測） | Kit のプロセスで 5.6GB（実測） | 起動から終了まで約 30 秒、約 79 steps/s（実測） | — |
 | 計画器の評価 30 ラウンド | 同上 | 同上 | 約 6 分（実測） | — |
 | 自動生成 50 エピソード | 同上 | 同上 | 13.8 分（実測） | 1.74GB（実測） |
-| 変換（train） | 0 | 5〜10GB | 10〜40 分 | 動画で数 GB |
+| 変換（train） | 0 | 未測定（1 エピソードずつ読むので、数 GB 以下の見込み） | 5.4 分（照合を含む。実測） | 41MB（実測） |
 | ACT の学習（P6 で選んだ場合） | 3〜8GB（sim は停止） | 6〜12GB | 数時間 | 1GB 未満 |
 | sim + GR00T の推論 | 約 10〜11GB | 約 23GB | — | — |
 
@@ -284,7 +332,7 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
 | P2 | 床のタスク `LeIsaac-LeKiwi-Sweep-Floor-v0` と、contract のテスト | 完了 |
 | P3 | 計画器と評価（`tools/sweep_eval.py`）。30 ラウンドで成功率 70% 以上 | 完了（30/30） |
 | P4 | 自動生成 50 エピソード（`make datagen`）と、その確認（`make sweep-inspect`、`make sweep-replay`） | 完了（50 エピソード、再生 20/20） |
-| P5 | 変換（`docker/envs/train`、`make convert`） | 未着手 |
+| P5 | 変換（`docker/envs/train`、`make convert`） | 完了（50 エピソード、照合 PASS） |
 | P6 | ポリシーの選択と学習（ユーザーが判断する） | 未着手 |
 | P7 | 段差、Loft でのデータの取り直し、テレオペのデータ、ランダム化をすべて有効にする、実機への展開 | 後で |
 

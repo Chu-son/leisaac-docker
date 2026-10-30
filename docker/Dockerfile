@@ -6,6 +6,8 @@
 #   sim       : Isaac Sim + IsaacLab + LeIsaac (シミュレータとポリシーのクライアント)
 #   gr00t-src : base + Isaac-GR00T のソース
 #   gr00t     : Isaac-GR00T N1.5 推論サーバ
+#   train-src : base + train の環境の定義を置く場所 (ソースの取得はない。make lock 用)
+#   train     : LeRobot (記録の変換と、ポリシーの学習)
 #
 # Python の依存は docker/envs/<target>/pyproject.toml で宣言し、uv.lock で固定する。
 # sim と gr00t を 1 つの環境にまとめることはできない
@@ -124,4 +126,29 @@ ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 RUN mkdir -p /workspace/data
 WORKDIR /workspace/Isaac-GR00T
+CMD ["bash"]
+
+########################################################################################
+FROM base AS train-src
+
+WORKDIR /opt/env/train
+
+########################################################################################
+FROM train-src AS train
+
+ARG UID
+ARG GID
+
+COPY --chown=dev:dev docker/envs/train /opt/env/train
+
+RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${UID},gid=${GID} \
+    uv sync --locked --inexact
+
+COPY --chown=dev:dev tools/ /opt/tools/
+# contract.py (tools/leisaac_ext) を import できるようにする
+ENV PYTHONPATH=/opt/tools \
+    HF_HOME=/workspace/data/.cache
+
+RUN mkdir -p /workspace/data
+WORKDIR /workspace
 CMD ["bash"]

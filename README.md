@@ -4,8 +4,9 @@
 
 - **sim**: Isaac Sim 5.1 + IsaacLab 2.3 + LeIsaac v0.4.0。テレオペ、リプレイ、推論クライアントを担当する
 - **gr00t**: GR00T N1.5 の推論サーバ。sim とは ZMQ の `:5555` で通信する
+- **train**: LeRobot 0.4.2。sim の記録を LeRobot 形式に変換し、後でポリシーを学習する（[docs/sweep.md](docs/sweep.md)）
 
-2 つは `docker/Dockerfile` の multi-stage target として作ります。分けている理由は [docs/decisions.md](docs/decisions.md) を参照してください。
+3 つは `docker/Dockerfile` の multi-stage target として作ります。分けている理由は [docs/decisions.md](docs/decisions.md) を参照してください。
 
 ## 必要環境
 
@@ -15,13 +16,13 @@
 | ドライバ | 580.178.04 |
 | OS | Ubuntu 22.04、X11 |
 | Docker | Docker Engine + Compose v2 + nvidia-container-toolkit |
-| ディスク | イメージ約 46GB（sim 30GB、gr00t 16GB）とビルドキャッシュ |
+| ディスク | イメージ約 60GB（sim 30GB、gr00t 16GB、train 14GB）とビルドキャッシュ |
 | RAM | 32GB。推論中は Kit が約 11GB 使う |
 
 ## クイックスタート（PickOrange）
 
 ```bash
-make build                 # sim / gr00t のイメージをビルドする（初回は約 20 分）
+make build                 # sim / gr00t / train のイメージをビルドする（初回は約 20 分）
 make assets                # アセットと学習済みポリシーを取得して検証する（約 8GB。手動で入手するものは案内が出る）
 make list-envs             # 登録されているタスクを表示する（15 件）
 
@@ -61,13 +62,14 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `sweep-eval` | Sweep タスクを計画器（特権情報を使う）で `EVAL_ROUNDS` 回解き、成功率を測る。結果は `data/sweep/eval/<日時>/` に残す |
 | `datagen` | Sweep タスクの自動生成。計画器が成功したエピソードだけを `NUM` 個、`data/datasets/$(DATASET).hdf5` に記録する（例: `make datagen DATASET=sweep_floor NUM=50`） |
 | `sweep-replay` | `datagen` の記録を再生し、記録どおりに成功するかを確かめる。`EPISODES="0 3"` で選ぶ。`HEADLESS=0` で GUI に表示する |
+| `convert` | `datagen` の記録を LeRobot 形式（lerobot 0.4.2、v3.0、30fps、動画は AV1）に変換し、`data/lerobot/$(DATASET)/` に出力する。読み直して、すべてのフレームを HDF5 と照合する（train イメージ） |
 | `sweep-inspect` | `datagen` の記録を Kit なしで確かめる。一覧表、上から見た図（`overview.png`）、動画（`episode_*.mp4`）を `data/sweep/inspect/$(DATASET)/` に作る |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx`。再生は記録時と `SIM_DEVICE` が違えば止まる（`FORCE=1` で続行） |
 | `teleop-lekiwi` / `replay-lekiwi` | LeKiwi 用の別名。`TASK` を LeKiwi にし、`DEVICE=keyboard` / `gamepad` を LeKiwi 用に読み替えて teleop / replay を実行する。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `eval` | 閉ループ推論を実行する |
 | `config` | `.env` とコマンドラインを反映した、実際に使われる設定を表示する |
-| `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、LeKiwi の起動（Loft がなければ SKIP）、Sweep タスクの確認（`sweep-check`）、VRAM ピークを確認する |
+| `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、LeKiwi の起動（Loft がなければ SKIP）、Sweep タスクの確認（`sweep-check`）、変換器の確認（train。合成データ）、VRAM ピークを確認する |
 | `lock` / `lock-check` | `docker/envs/*/uv.lock` を更新する / 最新であることを確認する |
 | `shell-sim` / `shell-gr00t` | コンテナのシェルに入る |
 
@@ -88,8 +90,8 @@ compose.yaml          # サービス定義と git の ref（x-versions）
 compose.leader.yaml   # Leader アーム接続時に重ねる設定
 Makefile
 docker/
-  Dockerfile          # base → sim / gr00t
-  envs/{sim,gr00t}/   # pyproject.toml（依存の宣言）と uv.lock（ハッシュ付きの固定）
+  Dockerfile          # base → sim / gr00t / train
+  envs/{sim,gr00t,train}/  # pyproject.toml（依存の宣言）と uv.lock（ハッシュ付きの固定）
 tools/
   gr00t_server.py     # VRAM 節約のラッパーを付けて GR00T の推論サーバを起動する
   probe_gr00t.py      # サーバとの疎通と action の形状を確認する
@@ -103,6 +105,8 @@ tools/
   sweep_eval.py       # make sweep-eval / datagen の本体（ポリシーに N ラウンド解かせて成功率を測る。--record で記録）
   sweep_replay.py     # make sweep-replay の本体（記録の再生と再現の確認）
   sweep_inspect.py    # make sweep-inspect の本体（記録の一覧、図、動画。Kit なし）
+  sweep_convert.py    # make convert の本体（HDF5 → LeRobot 形式と照合。train イメージ）
+  train_check.py      # make check の 6 番目（contract と lerobot の LeKiwi の一致、合成データの変換）
   fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
 data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）

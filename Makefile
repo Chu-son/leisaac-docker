@@ -49,6 +49,8 @@ COMPOSE        := docker compose -f compose.yaml $(if $(filter $(LEADER_DEVICES)
 # 端末から実行したときだけ TTY を割り当てる。スクリプトは自前のタスクを登録するラッパーを通して実行する
 TTY_FLAG     := $(if $(shell test -t 0 && echo y),,-T)
 SIM_RUN       = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) sim python /opt/tools/leisaac_run.py
+# train (LeRobot。記録の変換と学習) も、コマンドごとに使い捨てのコンテナで実行する
+TRAIN_RUN     = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) train python
 SIM_ARGS      = --device=$(SIM_DEVICE) \
 	$(if $(TEX_BUDGET),--kit_args="--/rtx-transient/resourcemanager/texturestreaming/memoryBudget=$(TEX_BUDGET)")
 DATASET_PATH := data/datasets/$(DATASET).hdf5
@@ -77,13 +79,13 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen sweep-replay sweep-inspect teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen sweep-replay sweep-inspect convert teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
 	@echo "使い方: make <target> [変数=値 ...]  変数は .env にも書ける (.env.example)。現在の値は make config"
 	@echo ""
-	@echo "  build            sim / gr00t イメージをビルド"
+	@echo "  build            sim / gr00t / train イメージをビルド"
 	@echo "  down / stop      全サービスの停止 / 実行中の sim コマンドの強制終了"
 	@echo "  list-envs        登録済みタスク一覧"
 	@echo "  smoke            TASK をヘッドレスで作り、ゼロ action で数ステップ動かす (起動確認)"
@@ -92,6 +94,7 @@ help:
 	@echo "  datagen          Sweep タスクの自動生成。計画器が成功したエピソードを NUM=$(NUM) 個記録する (-> $(DATASET_PATH))"
 	@echo "  sweep-replay     datagen の記録を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
 	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
+	@echo "  convert          datagen の記録を LeRobot 形式に変換し、HDF5 と照合する (train イメージ。-> data/lerobot/$(DATASET)/)"
 	@echo "  teleop           テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE) -> $(DATASET_PATH)。追記は RESUME=1)"
 	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生 (記録時と SIM_DEVICE が違えば止める。FORCE=1 で続行)"
@@ -124,7 +127,7 @@ down:
 # Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
 stop:
 	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval \
-		leisaac-datagen leisaac-sweep-replay leisaac-sweep-inspect leisaac-shell >/dev/null 2>&1
+		leisaac-datagen leisaac-sweep-replay leisaac-sweep-inspect leisaac-convert leisaac-train-check leisaac-shell >/dev/null 2>&1
 
 shell-sim:
 	$(COMPOSE) run --rm $(TTY_FLAG) --name leisaac-shell sim bash
@@ -173,6 +176,13 @@ sweep-replay:
 sweep-inspect:
 	$(call SIM_RUN,leisaac-sweep-inspect) /opt/tools/sweep_inspect.py --dataset_file=$(DATASET_FILE) \
 		--out_dir=/workspace/data/sweep/inspect/$(DATASET) $(if $(EPISODES),--videos $(EPISODES))
+
+# datagen の記録を LeRobot 形式 (lerobot 0.4.2) に変換し、読み直して HDF5 と照合する。上書きも追記もしない
+convert:
+	@if [ -e "data/lerobot/$(DATASET)" ]; then \
+		echo "[エラー] data/lerobot/$(DATASET) は既にあります。別の名前で変換するか、不要なら消してください"; exit 1; \
+	fi
+	$(call TRAIN_RUN,leisaac-convert) /opt/tools/sweep_convert.py --dataset_file=$(DATASET_FILE) --root=/workspace/data/lerobot/$(DATASET)
 
 # leisaac は既存のデータセットがあると停止する。上書きも暗黙の追記もしないよう、先に確認する
 teleop:
@@ -233,9 +243,11 @@ check:
 lock:
 	$(COMPOSE) --profile tools run --rm lock-sim uv lock $(if $(filter 1,$(UPGRADE)),--upgrade)
 	$(COMPOSE) --profile tools run --rm lock-gr00t uv lock $(if $(filter 1,$(UPGRADE)),--upgrade)
+	$(COMPOSE) --profile tools run --rm lock-train uv lock $(if $(filter 1,$(UPGRADE)),--upgrade)
 	@wc -l docker/envs/*/uv.lock
 
 # lock が pyproject.toml と、固定した ref のソースに対して最新であることを確認する
 lock-check:
 	$(COMPOSE) --profile tools run --rm lock-sim uv lock --check
 	$(COMPOSE) --profile tools run --rm lock-gr00t uv lock --check
+	$(COMPOSE) --profile tools run --rm lock-train uv lock --check

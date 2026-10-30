@@ -3,18 +3,18 @@
 LeIsaac（Isaac Sim + IsaacLab）と GR00T N1.5 の推論サーバを Docker で動かすリポジトリです。全体像は [README.md](README.md) を参照してください。
 
 ## 構成
-- `docker/Dockerfile`: multi-stage 構成。`base` から `sim`（Isaac Sim + leisaac）と `gr00t`（推論サーバ）を作る。
-- `docker/envs/{sim,gr00t}/`: Python 依存の宣言（pyproject.toml）と固定（uv.lock）。
+- `docker/Dockerfile`: multi-stage 構成。`base` から `sim`（Isaac Sim + leisaac）、`gr00t`（推論サーバ）、`train`（LeRobot。記録の変換と学習）を作る。
+- `docker/envs/{sim,gr00t,train}/`: Python 依存の宣言（pyproject.toml）と固定（uv.lock）。
 - `assets.json`: 外部リソース（USD アセット、学習済みポリシー）の取得元とハッシュ。`make assets` で取得・検証する。新しいアセットを使うときはここに追記する。
 - `.env.example`: 設定の雛形。設定の入り口は `.env` とコマンドラインだけ（優先順位: コマンドライン > `.env` > 既定値）。`.env` は Makefile と compose の両方が読み、git には含めない。Makefile に変数を足したら、ここと `make config` にも書く。compose が参照する変数は Makefile で export する。
 - sim の設定（`SIM_DEVICE` など）は全タスクで共通にする。タスクごとの例外を作らない。
 - `compose.yaml`: サービスの定義と、git の ref（`x-versions`）。`gr00t` は profile `inference` に属する。
-- `tools/`: sim と gr00t の両方のイメージに含まれ、`/opt/tools` に置かれる（変更したら `make build`）。check.sh と fetch_assets.py はホストで実行する。
+- `tools/`: sim、gr00t、train のイメージに含まれ、`/opt/tools` に置かれる（変更したら `make build`）。check.sh と fetch_assets.py はホストで実行する。
 - sim のスクリプトは、すべて `tools/leisaac_run.py` を通して実行する（Makefile の `SIM_RUN`）。自前のタスク（`tools/leisaac_ext`、PYTHONPATH で読み込む）を登録してから、上流のスクリプトをそのまま実行する。上流のコードは変更しない。
 - 操作はすべて `make` で行う。ターゲットの一覧は `make help` で表示できる。
 
 ## 不変条件（壊さないこと）
-- **sim と gr00t は 1 つの環境にまとめない。** gymnasium と protobuf の要求が衝突する（docs/decisions.md）。
+- **sim と gr00t は 1 つの環境にまとめない。** gymnasium と protobuf の要求が衝突する（docs/decisions.md）。sim に lerobot も入れない（isaacsim が固定している numpy 1.26.0 などと衝突するおそれがあり、sim の環境を変えないため。変換と学習は train で行う）。
 - **`LEISAAC_REF` と `GR00T_REF` は必ず組で更新する。** 片方だけ変えると action の形状が合わなくなる（docs/versions.md）。
 - Python の依存は `docker/envs/<target>/pyproject.toml` に宣言し、`uv.lock` で固定する。`pip install` や `uv pip install` でイメージを組み立てない。ref や pyproject を変えたら `make lock` を実行する（忘れるとビルドが失敗する）。
 - torch の取得元は `[tool.uv.sources]` で cu128 の index に固定している。isaacsim のバージョン指定を上書きする override は、必要な根拠が出るまで入れない（docs/decisions.md）。
