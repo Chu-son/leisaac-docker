@@ -87,6 +87,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `TRAIN_POLICY` / `TRAIN_NAME` | `act` / `$(DATASET)-$(TRAIN_POLICY)` |
 | `TRAIN_STEPS` / `TRAIN_BATCH` | 空（ポリシーごとの既定。`tools/sweep_train.py`） |
 | `EVAL_POLICY` / `TRAIN_CHECKPOINT` | `planner` / `last`（`sweep-eval` のポリシーと、推論サーバが読むチェックポイント） |
+| `EVAL_SEED` | 空（`sweep-eval` のシード。空なら現在時刻） |
 
 ## ディレクトリ構成
 

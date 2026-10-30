@@ -32,6 +32,8 @@ ACTION_HORIZON    ?= 16
 # remote の推論サーバは、data/train/$(TRAIN_NAME)/checkpoints/$(TRAIN_CHECKPOINT)/ を読む
 EVAL_POLICY       ?= planner
 TRAIN_CHECKPOINT  ?= last
+# sweep-eval の乱数のシード。空なら現在時刻。同じ値にすると、ラウンドごとの配置がそろう
+EVAL_SEED         ?=
 
 # --- 学習 (train)。出力先は data/train/$(TRAIN_NAME)/。TRAIN_STEPS / TRAIN_BATCH が空なら sweep_train.py の既定
 TRAIN_POLICY ?= act
@@ -136,7 +138,7 @@ config:
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
-	@echo "             EVAL_POLICY=$(EVAL_POLICY) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
+	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
 	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
@@ -175,7 +177,7 @@ sweep-check:
 
 # Sweep タスクの評価。EVAL_POLICY=planner は計画器 (特権情報を使う)、remote は学習したポリシー (推論サーバを先に起動する)
 sweep-eval: $(if $(filter remote,$(EVAL_POLICY)),policy-up)
-	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) \
+	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) \
 		$(if $(filter remote,$(EVAL_POLICY)),--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON)) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 

@@ -335,6 +335,19 @@ make import-policy FILE=~/Downloads/xxx.tar TRAIN_NAME=sweep_floor-smolvla   # C
 | smolvla | 2 step、batch 2 | 動く。VRAM のピーク 3.0GB。保存された設定の state と action が 9 次元であることを確認。チェックポイント 1 つ約 1.2GB |
 | groot | 2 step、batch 1 | データの読み込み、前処理、forward までは通るが、backward で OOM（12GB のうち 10GB を使用）。計画どおり Colab の A100 で学習する |
 
+### SmolVLA をローカルで学習できるか（2026-10-30、P6d の後）
+
+`make train DATASET=sweep_floor TRAIN_POLICY=smolvla TRAIN_STEPS=200 TRAIN_BATCH=<32|16>` で測りました（VRAM は nvidia-smi で 2 秒ごと、画面の分 1.2GB を含む全体の値）。
+
+| batch | 1 step | VRAM のピーク | 既定の 20,000 step の見込み |
+|---|---|---|---|
+| 32 | 0.595 秒 | 9.5GB | 約 3.3 時間 |
+| 16 | 0.297 秒 | 6.1GB | 約 1.7 時間 |
+
+- batch 32 まではローカルで学習できます。既定の batch 64 は、この伸び方（batch 16 ごとに約 3.4GB）だと 12GB に収まりません。lerobot 0.4.2 の学習には勾配の累積がないので、batch を下げると 1 回の更新のサンプルが減ります。既定と同じサンプル数（20,000 × 64）を batch 32 で見るなら 40,000 step（約 6.6 時間）です。
+- チェックポイントは 1 つ約 1.2GB です（200 step で 5 つ、6.2GB）。
+- 学習率のスケジュールは steps に合わせて縮むので、step を変えても最後まで下がります。
+
 ## Colab での学習（`notebooks/train_colab.ipynb`）
 
 SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノートブックは、公開リポジトリをトークンなしで clone し、同じ lock（`docker/envs/train/uv.lock`）から `uv sync --locked` で環境（Python 3.11 の venv）を作って、ローカルと同じ `tools/sweep_train.py` を実行します。Colab のカーネルの Python とは別の環境なので、Colab に入っているパッケージの版には左右されません。
@@ -359,6 +372,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 ```bash
 make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act EVAL_ROUNDS=30   # 推論サーバを起動 (make policy-up) してから評価する
 make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act TRAIN_CHECKPOINT=020000   # 途中のチェックポイント
+make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act EVAL_SEED=1793361616      # シードを固定する (ラウンドごとの配置がそろう)
 make policy-down                                                                 # 推論サーバを止める (make down でも止まる)
 ```
 
@@ -387,6 +401,18 @@ make policy-down                                                                
 | 推論と資源 | 1 回 21〜32ms。サーバの torch の確保 0.2GB。VRAM は全体のピーク 3.7GB、RAM はホスト全体のピーク 16.6GB。30 ラウンドの実時間 10.4 分（計画器の約 6 分より長いのは、時間切れのラウンドが多いため） |
 
 - 結果は `data/sweep/eval/20261030-120016/`（`summary.json`、`rounds.jsonl`）に残っています。
+
+同じシード（`EVAL_SEED=1793361616`）で、チェックポイントと ACTION_HORIZON を変えて評価しました（各 30 ラウンド）。
+
+| チェックポイント | ACTION_HORIZON | 成功 | 目標領域の平均 | 台車がゴミに当たった | ラウンドごと（S が成功） |
+|---|---|---|---|---|---|
+| 100,000（上の結果） | 16 | 7/30（23%、12〜41%） | 4.2 | 24/30 | `....S.......S..S..S.S...S...S.` |
+| 40,000 | 16 | 9/30（30%、17〜48%） | 4.1 | 20/30 | `.......SS..S...S...SS..SS..S..` |
+| 60,000 | 16 | 11/30（37%、22〜55%） | 4.4 | 20/30 | `S...SS.S...S...S.S.SS...S.S...` |
+| 100,000 | 8 | 10/30（33%、19〜51%） | 4.7 | 23/30 | `SS...SSS....S..S..S.S...S.....` |
+
+- 15、20、24 番目のラウンドは 4 つとも成功していて、同じシードで配置がそろっていると見られます。
+- 差は 30 ラウンドの信頼区間の中に収まっていて、チェックポイントの選び方や ACTION_HORIZON が大きく効いているとは言えません。どの条件でも台車がゴミに当たるラウンドが 2/3 以上あります。次は、データを増やして学習し直します。
 - この結果は 1 回の評価です。他のポリシーや設定と比べるときは、docs/evaluation.md に従います（1 回の結果だけで差があると結論しない）。途中のチェックポイント（`TRAIN_CHECKPOINT=020000` など）や `ACTION_HORIZON` での違いは、まだ測っていません。
 
 ## 実機との差（既知）
