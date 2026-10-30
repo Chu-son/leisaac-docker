@@ -11,6 +11,9 @@ DATASET     ?= demo
 RESUME      ?= 0
 FORCE       ?= 0
 LEADER_PORT ?= /dev/ttyACM0
+# Sweep タスクの自動生成で集めるエピソードの数と、sweep-replay / sweep-inspect で選ぶエピソードの番号 (空ならすべて)
+NUM         ?= 50
+EPISODES    ?=
 
 # --- sim の設定 (すべてのタスクで共通)。既定は VRAM 12GB 向けで、物理演算を CPU にし、
 # テクスチャストリーミングの予算 (VRAM に対する割合) を絞る。VRAM に余裕があれば .env で
@@ -74,7 +77,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen sweep-replay sweep-inspect teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -86,6 +89,9 @@ help:
 	@echo "  smoke            TASK をヘッドレスで作り、ゼロ action で数ステップ動かす (起動確認)"
 	@echo "  sweep-check      Sweep タスクの確認 (contract と上流の一致、配置、成功判定。画像は data/sweep/check/)"
 	@echo "  sweep-eval       Sweep タスクを計画器で EVAL_ROUNDS 回解き、成功率を測る (結果は data/sweep/eval/<日時>/)"
+	@echo "  datagen          Sweep タスクの自動生成。計画器が成功したエピソードを NUM=$(NUM) 個記録する (-> $(DATASET_PATH))"
+	@echo "  sweep-replay     datagen の記録を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
+	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
 	@echo "  teleop           テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE) -> $(DATASET_PATH)。追記は RESUME=1)"
 	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生 (記録時と SIM_DEVICE が違えば止める。FORCE=1 で続行)"
@@ -102,6 +108,7 @@ help:
 config:
 	@echo ".env: $(if $(wildcard .env),あり,なし)"
 	@echo "[対象と記録] TASK=$(TASK) DEVICE=$(DEVICE) DATASET=$(DATASET) RESUME=$(RESUME) FORCE=$(FORCE) LEADER_PORT=$(LEADER_PORT)"
+	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて))"
 	@echo "[sim]        SIM_DEVICE=$(SIM_DEVICE) TEX_BUDGET=$(or $(TEX_BUDGET),(Kit の既定 0.6))"
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
@@ -116,7 +123,8 @@ down:
 
 # Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
 stop:
-	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval leisaac-shell >/dev/null 2>&1
+	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval \
+		leisaac-datagen leisaac-sweep-replay leisaac-sweep-inspect leisaac-shell >/dev/null 2>&1
 
 shell-sim:
 	$(COMPOSE) run --rm $(TTY_FLAG) --name leisaac-shell sim bash
@@ -144,6 +152,27 @@ sweep-check:
 sweep-eval:
 	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=planner --rounds=$(EVAL_ROUNDS) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+
+# Sweep タスクの自動生成 (sweep_eval.py --record)。成功したエピソードだけを記録する。上書きも追記もしない。
+# ラウンドごとのログは data/datasets/$(DATASET).datagen/ に残す
+datagen:
+	@if [ -e "$(DATASET_PATH)" ]; then \
+		echo "[エラー] $(DATASET_PATH) は既にあります。別の名前 (DATASET=...) を指定してください"; exit 1; \
+	fi
+	@mkdir -p $(dir $(SIM_RECORD)) && printf 'SIM_DEVICE=%s\nTEX_BUDGET=%s\n' "$(SIM_DEVICE)" "$(TEX_BUDGET)" > $(SIM_RECORD)
+	$(call SIM_RUN,leisaac-datagen) /opt/tools/sweep_eval.py --policy=planner --record --dataset_file=$(DATASET_FILE) \
+		--num_demos=$(NUM) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+
+# datagen の記録を action で再生し、成功と最終位置を記録と比べる (結果は data/sweep/replay/<日時>/)
+sweep-replay:
+	$(check_sim_record)
+	$(call SIM_RUN,leisaac-sweep-replay) /opt/tools/sweep_replay.py --dataset_file=$(DATASET_FILE) \
+		$(if $(EPISODES),--episodes $(EPISODES)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+
+# datagen の記録を、Kit を起動せずに確かめる。動画は EPISODES のもの (空ならすべて)
+sweep-inspect:
+	$(call SIM_RUN,leisaac-sweep-inspect) /opt/tools/sweep_inspect.py --dataset_file=$(DATASET_FILE) \
+		--out_dir=/workspace/data/sweep/inspect/$(DATASET) $(if $(EPISODES),--videos $(EPISODES))
 
 # leisaac は既存のデータセットがあると停止する。上書きも暗黙の追記もしないよう、先に確認する
 teleop:

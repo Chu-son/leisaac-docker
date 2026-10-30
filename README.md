@@ -59,6 +59,9 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `smoke` | `TASK` をヘッドレスで作り、ゼロ action で数ステップ動かす（起動確認。`DEVICE` で action の構成を選ぶ） |
 | `sweep-check` | Sweep タスク（`LeIsaac-LeKiwi-Sweep-Floor-v0`）の確認。データの約束事と上流の変換の一致、ゴミの配置、成功の判定を確かめ、front と wrist の画像を `data/sweep/check/` に保存する（[docs/sweep.md](docs/sweep.md)） |
 | `sweep-eval` | Sweep タスクを計画器（特権情報を使う）で `EVAL_ROUNDS` 回解き、成功率を測る。結果は `data/sweep/eval/<日時>/` に残す |
+| `datagen` | Sweep タスクの自動生成。計画器が成功したエピソードだけを `NUM` 個、`data/datasets/$(DATASET).hdf5` に記録する（例: `make datagen DATASET=sweep_floor NUM=50`） |
+| `sweep-replay` | `datagen` の記録を再生し、記録どおりに成功するかを確かめる。`EPISODES="0 3"` で選ぶ。`HEADLESS=0` で GUI に表示する |
+| `sweep-inspect` | `datagen` の記録を Kit なしで確かめる。一覧表、上から見た図（`overview.png`）、動画（`episode_*.mp4`）を `data/sweep/inspect/$(DATASET)/` に作る |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx`。再生は記録時と `SIM_DEVICE` が違えば止まる（`FORCE=1` で続行） |
 | `teleop-lekiwi` / `replay-lekiwi` | LeKiwi 用の別名。`TASK` を LeKiwi にし、`DEVICE=keyboard` / `gamepad` を LeKiwi 用に読み替えて teleop / replay を実行する。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
@@ -97,7 +100,9 @@ tools/
                       #   sweep_floor.py: 床のタスクの定義、sweep_mdp.py: 配置、ランダム化、成功の判定、
                       #   sweep_planner.py: 計画器
   sweep_check.py      # make sweep-check の本体
-  sweep_eval.py       # make sweep-eval の本体（ポリシーに N ラウンド解かせて成功率を測る）
+  sweep_eval.py       # make sweep-eval / datagen の本体（ポリシーに N ラウンド解かせて成功率を測る。--record で記録）
+  sweep_replay.py     # make sweep-replay の本体（記録の再生と再現の確認）
+  sweep_inspect.py    # make sweep-inspect の本体（記録の一覧、図、動画。Kit なし）
   fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
 data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）
