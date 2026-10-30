@@ -145,9 +145,11 @@ RUN --mount=type=cache,target=/home/dev/.cache/uv,uid=${UID},gid=${GID} \
     uv sync --locked --inexact
 
 COPY --chown=dev:dev tools/ /opt/tools/
-# contract.py (tools/leisaac_ext) を import できるようにする
+# contract.py (tools/leisaac_ext) を import できるようにする。
+# 取得したモデルの重み (Hub と torchvision) は data/.cache に置き、コンテナを作り直しても再取得しない
 ENV PYTHONPATH=/opt/tools \
-    HF_HOME=/workspace/data/.cache
+    HF_HOME=/workspace/data/.cache \
+    TORCH_HOME=/workspace/data/.cache/torch
 
 RUN mkdir -p /workspace/data
 WORKDIR /workspace

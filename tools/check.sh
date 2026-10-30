@@ -111,12 +111,13 @@ else
     fi
 fi
 
-step "6/6 train: 変換器の確認 (合成データ)"
+step "6/6 train: 変換と学習の確認 (合成データ)"
 timeout 600 docker compose run --rm -T --name leisaac-train-check train python /opt/tools/train_check.py \
     < /dev/null > "$LOG_DIR/train_check.log" 2>&1
 docker rm -f leisaac-train-check >/dev/null 2>&1
 if grep -q "TRAIN CHECK OK" "$LOG_DIR/train_check.log"; then
     ok "$(grep 'SWEEP CONVERT PASS' "$LOG_DIR/train_check.log" | sed 's/ -> .*//')"
+    ok "$(grep 'SWEEP TRAIN OK' "$LOG_DIR/train_check.log" | sed 's/ -> .*//')"
 else
     grep -E "\[NG\]|Error" "$LOG_DIR/train_check.log" | sed 's/^ */  /'
     ng "確認に失敗 ($LOG_DIR/train_check.log)"

@@ -1,6 +1,7 @@
 # train target の Python 環境の定義。依存はここで宣言し、uv.lock (ハッシュ付き) で完全に固定する。
 # lock の生成: make lock  /  ビルド: uv sync --locked (docker/Dockerfile)
-# Sweep タスクの記録 (HDF5) を LeRobot 形式に変換し (make convert)、後でポリシー (ACT など) を学習する。
+# Sweep タスクの記録 (HDF5) を LeRobot 形式に変換し (make convert)、ポリシー (ACT、SmolVLA、GR00T) を学習する (make train)。
+# Colab でも同じ lock から環境を作る (notebooks/train_colab.ipynb)。
 # sim には lerobot を入れない (isaacsim が numpy 1.26.0 に固定しているため。docs/sweep.md)
 [project]
 name = "leisaac-train-env"
@@ -8,12 +9,16 @@ version = "0"
 requires-python = "==3.11.*"
 dependencies = [
     # 実機の LeKiwi のキー名と単位 (tools/leisaac_ext/contract.py) はこの版に合わせている。
-    # extras の lekiwi (feetech-servo-sdk と pyzmq) は、実機の LeKiwi のクラスを作り、contract と照合するため (make check)
-    "lerobot[lekiwi]==0.4.2",
+    # extras の lekiwi (feetech-servo-sdk と pyzmq) は、実機の LeKiwi のクラスを作り、contract と照合するため (make check)。
+    # smolvla と groot は、学習するポリシーの依存
+    "lerobot[lekiwi,smolvla,groot]==0.4.2",
     # Blackwell (sm_120) には cu128 ビルドが必要。下の sources で index を明示している
     "torch==2.7.0",
     "torchvision==0.22.0",
     "h5py",
+    # lerobot の groot (GR00T N1.5 の視覚エンコーダ) が必須にしている。ソースからのビルドを避け、
+    # 公式の配布物 (torch 2.7、CUDA 12、C++11 ABI、Python 3.11 向け) を下の sources で指定している
+    "flash-attn==2.8.3",
 ]
 
 [tool.uv]
@@ -23,6 +28,7 @@ environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp311-cp311-linux_x86_64.whl" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

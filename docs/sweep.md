@@ -296,7 +296,44 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
 | 画像の平均絶対誤差 | front は平均 1.33、最大 2.51。wrist は平均 1.65、最大 2.53 |
 | フレームのずれの検出 | 前後に 1 フレームずらすと、差は 0.1〜0.4 大きくなる（全エピソードで、ずれなし） |
 
-- GR00T N1.5 は LeRobot v2.1 形式を読むので、v3.0 のままでは使えません。GR00T を選んだときは、同じ HDF5 から v2.1 形式で出力する処理を足します（P6 で判断します）。
+- GR00T N1.5 は、lerobot 版（`lerobot.policies.groot`）を使うので、v3.0 のまま学習できます（Isaac-GR00T 版が読むのは v2.1 形式。P6f で lerobot 版が使えないと分かったときに、v2.1 での出力を考えます）。
+
+## 学習（`make train`）
+
+```bash
+make train DATASET=sweep_floor TRAIN_POLICY=act                  # -> data/train/sweep_floor-act/
+make train DATASET=sweep_floor TRAIN_POLICY=act TRAIN_STEPS=300 TRAIN_NAME=act-try
+make colab-data DATASET=sweep_floor                              # -> data/colab/sweep_floor.tar（Drive へは手動で上げる）
+make import-policy FILE=~/Downloads/xxx.tar TRAIN_NAME=sweep_floor-smolvla   # Colab の結果 -> data/train/sweep_floor-smolvla/
+```
+
+### 中身（`tools/sweep_train.py`）
+
+- lerobot 0.4.2 の `lerobot-train` を呼ぶ薄いラッパーです。Docker の外（Colab）でも、train の環境（`docker/envs/train` の lock）があれば同じように動きます。
+- ポリシーごとの既定（`PRESETS`）に、共通の設定（ローカルのデータセット、Hub に上げない、wandb を使わない、チェックポイントは steps の 1/5 ごと）を足して実行します。`-- ` の後ろは、そのまま lerobot-train に渡します。
+- 出力先は `data/train/<TRAIN_NAME>/`（lerobot の output_dir。`checkpoints/<step>/pretrained_model/` と `checkpoints/last`）。既にあれば止めます（上書きも再開もしない）。実行したコマンドと結果は `sweep_train.json` に残ります。`data/policies/` は make assets で取得するポリシーの場所なので、学習の出力は分けています。
+
+| ポリシー | 始め方 | 既定の steps / batch | 注意 |
+|---|---|---|---|
+| act | 新しく作る（`--policy.type=act`。backbone は ImageNet の ResNet18） | 100,000 / 8 | — |
+| smolvla | `lerobot/smolvla_base` から | 20,000 / 64 | 下の「事前学習済みのモデルの入出力」 |
+| groot | `nvidia/GR00T-N1.5-3B` から（`--policy.type=groot`。LLM と視覚エンコーダは凍結） | 20,000 / 32 | flash-attn が必須。ローカルでは学習できない |
+
+- **事前学習済みのモデルの入出力**: smolvla_base は、入出力の名前と形（camera1〜3、state と action が 6 次元）を自分の設定に持っていて、lerobot はそれをデータセットに合わせません。action が 6 次元のままだと、推論で台車の速度（7〜9 番目）が切り捨てられます。そこで、`sweep_train.py` がデータセットの `meta/info.json` から入出力の形を作り、`--policy.input_features` / `--policy.output_features` で上書きします。カメラは rename_map で front → camera1、wrist → camera2 にします。dict の上書きは足し込みなので、camera3 は設定に残りますが、画像がないカメラは飛ばされます（`empty_cameras=0`）。
+- **flash-attn**: lerobot の groot が必須にしています（視覚エンコーダが flash_attention_2 を固定で使う）。ソースからのビルドを避け、公式の配布物（2.8.3、torch 2.7、CUDA 12、C++11 ABI、Python 3.11 向け）を URL で固定しています。この GPU（RTX 5070、sm_120）でも動きます（`make check` の 6 番目で確かめる）。
+- 取得したモデルの重み（Hub と torchvision）は `data/.cache/` に置きます（GR00T とあわせて約 8GB）。
+
+### 確認（`make check` の 6 番目）
+
+変換の確認（上の「照合」）に加えて、学習するポリシー（ACT、SmolVLA、GR00T）を import できること、flash-attn がこの GPU で動くこと、合成データで ACT を 4 step 学習してチェックポイントが残ることを確かめます。
+
+### 結果（2026-10-30、P6a。ローカルで数 step だけ）
+
+| ポリシー | 実行 | 結果 |
+|---|---|---|
+| act | 300 step、batch 8 | 25 秒（1 step 0.043 秒。100,000 step なら約 72 分の見込み）。VRAM のピーク 2.7GB（画面の分を含む）。チェックポイント 1 つ約 0.6GB（optimizer の状態を含む） |
+| smolvla | 2 step、batch 2 | 動く。VRAM のピーク 3.0GB。保存された設定の state と action が 9 次元であることを確認。チェックポイント 1 つ約 1.2GB |
+| groot | 2 step、batch 1 | データの読み込み、前処理、forward までは通るが、backward で OOM（12GB のうち 10GB を使用）。計画どおり Colab の A100 で学習する |
 
 ## 実機との差（既知）
 
@@ -317,7 +354,7 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
 | 計画器の評価 30 ラウンド | 同上 | 同上 | 約 6 分（実測） | — |
 | 自動生成 50 エピソード | 同上 | 同上 | 13.8 分（実測） | 1.74GB（実測） |
 | 変換（train） | 0 | 未測定（1 エピソードずつ読むので、数 GB 以下の見込み） | 5.4 分（照合を含む。実測） | 41MB（実測） |
-| ACT の学習（P6 で選んだ場合） | 3〜8GB（sim は停止） | 6〜12GB | 数時間 | 1GB 未満 |
+| ACT の学習（batch 8） | 2.7GB（実測。sim は停止） | 未測定 | 100,000 step で約 72 分の見込み（300 step の実測から） | チェックポイント 1 つ約 0.6GB（実測） |
 | sim + GR00T の推論 | 約 10〜11GB | 約 23GB | — | — |
 
 - sim、GR00T、学習の 3 つを同時に動かさない。GR00T の学習はローカルでは行えない（クラウドで行う）。
@@ -333,7 +370,7 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
 | P3 | 計画器と評価（`tools/sweep_eval.py`）。30 ラウンドで成功率 70% 以上 | 完了（30/30） |
 | P4 | 自動生成 50 エピソード（`make datagen`）と、その確認（`make sweep-inspect`、`make sweep-replay`） | 完了（50 エピソード、再生 20/20） |
 | P5 | 変換（`docker/envs/train`、`make convert`） | 完了（50 エピソード、照合 PASS） |
-| P6 | ポリシーの学習と評価（下の「P6 の計画」） | 未着手 |
+| P6 | ポリシーの学習と評価（下の「P6 の計画」） | 進行中（P6a 完了） |
 | P7 | 段差、Loft でのデータの取り直し、テレオペのデータ、ランダム化をすべて有効にする、実機への展開 | 後で |
 
 ### P6 の計画（2026-10-30 に決定）
@@ -342,7 +379,7 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
 
 | # | 内容 | 場所 |
 |---|---|---|
-| P6a | train に SmolVLA と GR00T の依存を足す。`tools/sweep_train.py` と `make train POLICY=act\|smolvla\|groot`、`make colab-data`、`make import-policy` | ローカル |
+| P6a | train に SmolVLA と GR00T の依存を足す。`tools/sweep_train.py` と `make train TRAIN_POLICY=act\|smolvla\|groot`、`make colab-data`、`make import-policy`（完了。上の「学習」） | ローカル |
 | P6b | `notebooks/train_colab.ipynb`。最初に GPU、CUDA ドライバ（cu128 の torch には 570 以降が要る）、flash-attn を確かめ、数十 step 学習する | Colab（L4） |
 | P6c | 推論サーバ（`tools/policy_server.py`、ZMQ）と `sweep_eval` の remote バックエンド。学習途中の ACT で評価が最後まで動くこと | ローカル |
 | P6d | ACT を学習し、30 ラウンドで評価する | ローカル |

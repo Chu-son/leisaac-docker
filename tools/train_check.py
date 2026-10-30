@@ -2,14 +2,22 @@
 
     python /opt/tools/train_check.py
 - contract のキー名とカメラが、lerobot 0.4.2 の実機の LeKiwi (LeKiwiClient) と一致すること
+- 学習するポリシー (ACT、SmolVLA、GR00T) を import でき、flash-attn (GR00T が使う) がこの GPU で動くこと
 - 合成した小さな HDF5 (datagen と同じ構成) を sweep_convert.py で変換し、照合が通ること (SWEEP CONVERT PASS)
+- 変換したデータで、sweep_train.py が ACT を数 step 学習し、チェックポイントを残すこと (SWEEP TRAIN OK)
 """
+import os
 import subprocess
 import sys
 import tempfile
 
 import h5py
 import numpy as np
+import torch
+from flash_attn import flash_attn_func
+from lerobot.policies.act.modeling_act import ACTPolicy  # noqa: F401
+from lerobot.policies.groot.modeling_groot import GrootPolicy  # noqa: F401
+from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy  # noqa: F401
 from lerobot.robots.lekiwi import LeKiwiClient, LeKiwiClientConfig
 
 from leisaac_ext import contract
@@ -19,6 +27,10 @@ assert tuple(robot._state_ft) == contract.STATE_NAMES, f"state のキー名が�
 assert tuple(robot.action_features) == contract.ACTION_NAMES, f"action のキー名が実機と違う: {list(robot.action_features)}"
 assert tuple(robot._cameras_ft) == contract.CAMERAS, f"カメラの名前が実機と違う: {list(robot._cameras_ft)}"
 print(f"contract matches lerobot {robot.name}: {len(contract.STATE_NAMES)} state/action names, cameras {contract.CAMERAS}")
+
+q = torch.randn(1, 128, 8, 64, device="cuda", dtype=torch.bfloat16)
+assert flash_attn_func(q, q, q).shape == q.shape
+print(f"policies import OK (act, smolvla, groot), flash-attn runs on {torch.cuda.get_device_name()}")
 
 
 def synthetic_images(steps: int, seed: int) -> np.ndarray:
@@ -54,4 +66,14 @@ with tempfile.TemporaryDirectory() as tmp:
     if out.returncode != 0:
         print(out.stderr[-3000:])
     assert out.returncode == 0 and any(line.startswith("SWEEP CONVERT PASS") for line in lines), "変換器の確認に失敗"
+
+    out = subprocess.run([sys.executable, "/opt/tools/sweep_train.py", "--policy", "act", "--dataset_root", f"{tmp}/lerobot",
+                          "--output_dir", f"{tmp}/train", "--steps", "4", "--batch_size", "2", "--num_workers", "0"],
+                         capture_output=True, text=True)
+    lines = [line for line in out.stdout.splitlines() if line.startswith("SWEEP TRAIN")]
+    print("\n".join(lines))
+    if out.returncode != 0:
+        print(out.stderr[-3000:])
+    checkpoint = f"{tmp}/train/checkpoints/last/pretrained_model/model.safetensors"
+    assert out.returncode == 0 and os.path.isfile(checkpoint), "学習の確認に失敗 (チェックポイントがない)"
 print("TRAIN CHECK OK")

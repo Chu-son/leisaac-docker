@@ -29,6 +29,14 @@ POLICY_HOST       ?= localhost
 POLICY_TIMEOUT_MS ?= 15000
 ACTION_HORIZON    ?= 16
 
+# --- 学習 (train)。出力先は data/train/$(TRAIN_NAME)/。TRAIN_STEPS / TRAIN_BATCH が空なら sweep_train.py の既定
+TRAIN_POLICY ?= act
+TRAIN_NAME   ?= $(DATASET)-$(TRAIN_POLICY)
+TRAIN_STEPS  ?=
+TRAIN_BATCH  ?=
+# import-policy で取り込む、Colab の学習結果 (tar)
+FILE         ?=
+
 # --- その他
 GROUP   ?=
 UPGRADE ?= 0
@@ -79,7 +87,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen sweep-replay sweep-inspect convert teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen sweep-replay sweep-inspect convert train colab-data import-policy teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -95,6 +103,9 @@ help:
 	@echo "  sweep-replay     datagen の記録を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
 	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
 	@echo "  convert          datagen の記録を LeRobot 形式に変換し、HDF5 と照合する (train イメージ。-> data/lerobot/$(DATASET)/)"
+	@echo "  train            data/lerobot/$(DATASET) で TRAIN_POLICY=$(TRAIN_POLICY) (act|smolvla|groot) を学習する (-> data/train/$(TRAIN_NAME)/)"
+	@echo "  colab-data       data/lerobot/$(DATASET) を 1 つの tar にする (Colab 用。-> data/colab/$(DATASET).tar。Drive へは手動で上げる)"
+	@echo "  import-policy    Colab の学習結果 FILE=<tar> を data/train/$(TRAIN_NAME)/ に展開する"
 	@echo "  teleop           テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE) -> $(DATASET_PATH)。追記は RESUME=1)"
 	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生 (記録時と SIM_DEVICE が違えば止める。FORCE=1 で続行)"
@@ -116,6 +127,7 @@ config:
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
+	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
 build:
@@ -127,7 +139,7 @@ down:
 # Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
 stop:
 	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval \
-		leisaac-datagen leisaac-sweep-replay leisaac-sweep-inspect leisaac-convert leisaac-train-check leisaac-shell >/dev/null 2>&1
+		leisaac-datagen leisaac-sweep-replay leisaac-sweep-inspect leisaac-convert leisaac-train leisaac-train-check leisaac-shell >/dev/null 2>&1
 
 shell-sim:
 	$(COMPOSE) run --rm $(TTY_FLAG) --name leisaac-shell sim bash
@@ -183,6 +195,36 @@ convert:
 		echo "[エラー] data/lerobot/$(DATASET) は既にあります。別の名前で変換するか、不要なら消してください"; exit 1; \
 	fi
 	$(call TRAIN_RUN,leisaac-convert) /opt/tools/sweep_convert.py --dataset_file=$(DATASET_FILE) --root=/workspace/data/lerobot/$(DATASET)
+
+# LeRobot 形式のデータでポリシーを学習する。上書きも再開もしない (docs/sweep.md の「学習」)
+train:
+	@if [ ! -d "data/lerobot/$(DATASET)" ]; then \
+		echo "[エラー] data/lerobot/$(DATASET) がありません。先に make convert DATASET=$(DATASET) を実行してください"; exit 1; \
+	fi
+	@if [ -e "data/train/$(TRAIN_NAME)" ]; then \
+		echo "[エラー] data/train/$(TRAIN_NAME) は既にあります。別の名前 (TRAIN_NAME=...) を指定してください"; exit 1; \
+	fi
+	$(call TRAIN_RUN,leisaac-train) /opt/tools/sweep_train.py --policy=$(TRAIN_POLICY) --dataset_root=/workspace/data/lerobot/$(DATASET) \
+		--output_dir=/workspace/data/train/$(TRAIN_NAME) $(if $(TRAIN_STEPS),--steps=$(TRAIN_STEPS)) $(if $(TRAIN_BATCH),--batch_size=$(TRAIN_BATCH))
+
+# Colab に渡すデータセットを 1 つの tar にする。Drive へは、ブラウザで手動で上げる (トークンを使わない)
+colab-data:
+	@if [ ! -d "data/lerobot/$(DATASET)" ]; then echo "[エラー] data/lerobot/$(DATASET) がありません"; exit 1; fi
+	@if [ -e "data/colab/$(DATASET).tar" ]; then echo "[エラー] data/colab/$(DATASET).tar は既にあります"; exit 1; fi
+	mkdir -p data/colab && tar -C data/lerobot -cf data/colab/$(DATASET).tar $(DATASET)
+	@ls -lh data/colab/$(DATASET).tar
+	@echo "これを Drive の MyDrive/leisaac/ に上げてください (notebooks/train_colab.ipynb)"
+
+# Colab の学習結果 (ノートブックが作る tar。中身は sweep_train.py の output_dir) を data/train/$(TRAIN_NAME)/ に展開する。
+# 既にあれば止める。sweep_train.json がない tar は、この仕組みの出力ではないので展開しない
+import-policy:
+	@if [ ! -f "$(FILE)" ]; then echo "[エラー] FILE=<Colab の学習結果の tar> を指定してください"; exit 1; fi
+	@if [ -e "data/train/$(TRAIN_NAME)" ]; then \
+		echo "[エラー] data/train/$(TRAIN_NAME) は既にあります。別の名前 (TRAIN_NAME=...) を指定してください"; exit 1; \
+	fi
+	@tar -tf "$(FILE)" | grep -qx './sweep_train.json' || { echo "[エラー] $(FILE) に sweep_train.json がありません"; exit 1; }
+	mkdir -p data/train/$(TRAIN_NAME) && tar -C data/train/$(TRAIN_NAME) --no-same-owner -xf "$(FILE)"
+	@du -sh data/train/$(TRAIN_NAME)
 
 # leisaac は既存のデータセットがあると停止する。上書きも暗黙の追記もしないよう、先に確認する
 teleop:
