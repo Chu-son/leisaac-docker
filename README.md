@@ -64,7 +64,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `sweep-replay` | `datagen` の記録を再生し、記録どおりに成功するかを確かめる。`EPISODES="0 3"` で選ぶ。`HEADLESS=0` で GUI に表示する |
 | `convert` | `datagen` の記録を LeRobot 形式（lerobot 0.4.2、v3.0、30fps、動画は AV1）に変換し、`data/lerobot/$(DATASET)/` に出力する。読み直して、すべてのフレームを HDF5 と照合する（train イメージ） |
 | `train` | `data/lerobot/$(DATASET)/` で `TRAIN_POLICY`（`act` / `smolvla` / `groot`）を学習し、`data/train/$(TRAIN_NAME)/` に出力する。GR00T はローカルでは学習できない（Colab で行う） |
-| `colab-data` / `import-policy` | Colab に渡すデータセットを `data/colab/$(DATASET).tar` にする / Colab の学習結果 `FILE=<tar>` を `data/train/$(TRAIN_NAME)/` に展開する（Drive との受け渡しはブラウザで手動） |
+| `colab-data` / `import-policy` | Colab に渡すデータセットを `data/colab/$(DATASET).tar` にする / Colab の学習結果 `FILE=<tar>` を `data/train/$(TRAIN_NAME)/` に展開する（Drive との受け渡しはブラウザで手動。Colab 側は `notebooks/train_colab.ipynb`） |
 | `sweep-inspect` | `datagen` の記録を Kit なしで確かめる。一覧表、上から見た図（`overview.png`）、動画（`episode_*.mp4`）を `data/sweep/inspect/$(DATASET)/` に作る |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx`。再生は記録時と `SIM_DEVICE` が違えば止まる（`FORCE=1` で続行） |
 | `teleop-lekiwi` / `replay-lekiwi` | LeKiwi 用の別名。`TASK` を LeKiwi にし、`DEVICE=keyboard` / `gamepad` を LeKiwi 用に読み替えて teleop / replay を実行する。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する |
@@ -114,6 +114,8 @@ tools/
   train_check.py      # make check の 6 番目（contract と lerobot の LeKiwi の一致、合成データの変換と学習）
   fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
+notebooks/
+  train_colab.ipynb   # Colab で学習する（GitHub から clone し、同じ lock から環境を作って sweep_train.py を実行する）
 data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）
 assets/               # USD アセット（git 管理外）
 docs/

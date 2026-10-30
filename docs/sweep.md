@@ -335,6 +335,25 @@ make import-policy FILE=~/Downloads/xxx.tar TRAIN_NAME=sweep_floor-smolvla   # C
 | smolvla | 2 step、batch 2 | 動く。VRAM のピーク 3.0GB。保存された設定の state と action が 9 次元であることを確認。チェックポイント 1 つ約 1.2GB |
 | groot | 2 step、batch 1 | データの読み込み、前処理、forward までは通るが、backward で OOM（12GB のうち 10GB を使用）。計画どおり Colab の A100 で学習する |
 
+## Colab での学習（`notebooks/train_colab.ipynb`）
+
+SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノートブックは、公開リポジトリをトークンなしで clone し、同じ lock（`docker/envs/train/uv.lock`）から `uv sync --locked` で環境（Python 3.11 の venv）を作って、ローカルと同じ `tools/sweep_train.py` を実行します。Colab のカーネルの Python とは別の環境なので、Colab に入っているパッケージの版には左右されません。
+
+1. ローカル: `make colab-data DATASET=sweep_floor` → `data/colab/sweep_floor.tar` をブラウザで Drive の `MyDrive/leisaac/` に上げる。学習に使う commit を push しておく
+2. Colab: ランタイムを GPU（L4 か A100）にし、最初のセルの設定（`COMMIT`、`TRAIN_POLICY`、`TRAIN_STEPS` など）を書き換えて、上から順に実行する。Drive のマウントは許可画面で承認する
+3. ノートブックが `MyDrive/leisaac/<TRAIN_NAME>.tar` を作る → ブラウザでダウンロード → `make import-policy FILE=<tar> TRAIN_NAME=<TRAIN_NAME>`
+
+- 最初に、GPU（compute capability 8.0 以上。T4 は flash-attn と bf16 が使えないので止める）、ドライバ、torch の CUDA、flash-attn の kernel を確かめます（`ENV OK`）。cu128 の torch は、ドライバが 570 より古くても CUDA の互換で動く見込みなので、ドライバの版では止めず、実際に kernel が動くかで判断します。
+- 出力は Colab のローカルディスク（`/content/leisaac/`）に書き、最後に tar にして Drive に保存します。既定では最後のチェックポイントだけを入れます（`KEEP_ALL_CHECKPOINTS = True` ですべて）。tar には `colab.json`（使った commit、GPU、ドライバ）も入ります。学習の途中でセッションが切れると、結果は残りません（長い学習で問題になれば、P6e / P6f で途中の保存を考える）。
+- セルは `!` を使わない普通の Python なので、Drive のマウント以外は Colab の外でも実行できます。
+
+### 結果（2026-10-30、P6b）
+
+| 場所 | 実行 | 結果 |
+|---|---|---|
+| ローカルの train コンテナ（Drive のマウントだけ飛ばす。RTX 5070、ドライバ 580） | commit 7488f50、ACT 50 step | clone から保存まで通る。`uv sync --locked` は約 3 分（キャッシュなし）。学習 12 秒。tar 591MB（最後のチェックポイントだけ）。`make import-policy` で取り込めた |
+| Colab（L4） | ACT か SmolVLA を数十 step | （ユーザーが実行する） |
+
 ## 実機との差（既知）
 
 | 項目 | sim | 実機 | 対応 |
@@ -380,7 +399,7 @@ make import-policy FILE=~/Downloads/xxx.tar TRAIN_NAME=sweep_floor-smolvla   # C
 | # | 内容 | 場所 |
 |---|---|---|
 | P6a | train に SmolVLA と GR00T の依存を足す。`tools/sweep_train.py` と `make train TRAIN_POLICY=act\|smolvla\|groot`、`make colab-data`、`make import-policy`（完了。上の「学習」） | ローカル |
-| P6b | `notebooks/train_colab.ipynb`。最初に GPU、CUDA ドライバ（cu128 の torch には 570 以降が要る）、flash-attn を確かめ、数十 step 学習する | Colab（L4） |
+| P6b | `notebooks/train_colab.ipynb`。最初に GPU、CUDA ドライバ、flash-attn を確かめ、数十 step 学習する（ローカルでの再現は完了。上の「Colab での学習」） | Colab（L4） |
 | P6c | 推論サーバ（`tools/policy_server.py`、ZMQ）と `sweep_eval` の remote バックエンド。学習途中の ACT で評価が最後まで動くこと | ローカル |
 | P6d | ACT を学習し、30 ラウンドで評価する | ローカル |
 | P6e | SmolVLA を学習し、同じ条件で評価する | Colab（L4）→ ローカル |

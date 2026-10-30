@@ -11,6 +11,7 @@ LeIsaac（Isaac Sim + IsaacLab）と GR00T N1.5 の推論サーバを Docker で
 - `compose.yaml`: サービスの定義と、git の ref（`x-versions`）。`gr00t` は profile `inference` に属する。
 - `tools/`: sim、gr00t、train のイメージに含まれ、`/opt/tools` に置かれる（変更したら `make build`）。check.sh と fetch_assets.py はホストで実行する。
 - sim のスクリプトは、すべて `tools/leisaac_run.py` を通して実行する（Makefile の `SIM_RUN`）。自前のタスク（`tools/leisaac_ext`、PYTHONPATH で読み込む）を登録してから、上流のスクリプトをそのまま実行する。上流のコードは変更しない。
+- `notebooks/train_colab.ipynb`: Colab での学習。公開リポジトリを clone し、train の uv.lock から環境を作って `tools/sweep_train.py` を実行する（docs/sweep.md）。
 - 操作はすべて `make` で行う。ターゲットの一覧は `make help` で表示できる。
 
 ## 不変条件（壊さないこと）
