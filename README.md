@@ -88,6 +88,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `TRAIN_STEPS` / `TRAIN_BATCH` | 空（ポリシーごとの既定。`tools/sweep_train.py`） |
 | `EVAL_POLICY` / `TRAIN_CHECKPOINT` | `planner` / `last`（`sweep-eval` のポリシーと、推論サーバが読むチェックポイント） |
 | `EVAL_SEED` | 空（`sweep-eval` のシード。空なら現在時刻） |
+| `EVAL_VIDEOS` | `0`（`1` で `sweep-eval` がラウンドごとの動画と `overview.png` を残す） |
 
 ## ディレクトリ構成
 
@@ -134,4 +135,5 @@ docs/
 - [docs/manual-tasks.md](docs/manual-tasks.md): 手作業のチェックリスト
 - [docs/lekiwi-learning.md](docs/lekiwi-learning.md): LeKiwi の学習と推論の調査結果と選択肢（Phase 4 の判断材料）
 - [docs/sweep.md](docs/sweep.md): LeKiwi の掃き掃除タスク（前提、データの約束事、進み具合）
+- [docs/sweep_experiments.md](docs/sweep_experiments.md): 掃き掃除タスクのポリシーの実験記録（経緯と結果）
 - [AGENTS.md](AGENTS.md): コーディングエージェント向けの要点

@@ -9,6 +9,8 @@
              action の系列の先頭 action_horizon 個を受け取る (leisaac_ext.remote)
 成功は終了条件 success (10 個中 8 個以上が目標領域に入る)。時間切れ (25 秒) は失敗。
 結果は out_dir の rounds.jsonl (ラウンドごと) と summary.json に残す。
+--videos を付けると、ラウンドごとの動画 (videos/round_<番号>_<success|failure>.mp4。front、wrist、上から見た図を
+並べた 30fps の実時間) と、全ラウンドの終わりの図を並べた overview.png も残す (leisaac_ext.sweep_video)。
 --record を付けると、成功したエピソードだけを HDF5 に記録する (isaaclab の RecorderManager。上流の teleop と同じ形式)。
 成功が num_demos 個になるか、ラウンドが rounds (既定は num_demos の 2 倍 + 10) に達したら終わる。
 """
@@ -31,6 +33,7 @@ parser.add_argument("--out_dir", default=None,
 parser.add_argument("--record", action="store_true", help="成功したエピソードを dataset_file に記録する (自動生成)")
 parser.add_argument("--dataset_file", default=None, help="記録先の HDF5 (--record。既にあれば止める)")
 parser.add_argument("--num_demos", type=int, default=50, help="記録する成功エピソードの数 (--record)")
+parser.add_argument("--videos", action="store_true", help="ラウンドごとの動画と overview.png を out_dir に残す")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 app = AppLauncher(vars(args)).app
@@ -40,6 +43,7 @@ import math
 import os
 import time
 
+import cv2
 import gymnasium as gym
 import numpy as np
 import torch
@@ -47,7 +51,7 @@ from isaaclab.managers import DatasetExportMode
 from isaaclab_tasks.utils import parse_env_cfg
 
 import leisaac  # noqa: F401
-from leisaac_ext import contract, remote, sweep_floor, sweep_mdp, sweep_planner
+from leisaac_ext import contract, remote, sweep_floor, sweep_mdp, sweep_planner, sweep_video
 
 
 class PlannerPolicy:
@@ -143,6 +147,9 @@ obs, _ = env.reset()
 results = []
 start = time.time()
 n_ok = 0
+maps = []
+if args.videos:
+    os.makedirs(f"{out_dir}/videos", exist_ok=True)
 with open(f"{out_dir}/rounds.jsonl", "w") as log:
     for r in range(max_rounds):
         if args.record and n_ok >= args.num_demos:
@@ -153,6 +160,9 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         # 台車の中心から最も近いゴミまでの距離の、ラウンド中の最小値。台車の外形の半径
         # (sweep_planner.BASE_RADIUS) より小さければ、ゴミに当たったか、台車の下にくぐらせている
         base_min_dist = math.inf
+        if args.videos:
+            video = sweep_video.VideoWriter(f"{out_dir}/videos/round_{r:03d}.mp4")
+            debris_start, base_path = sweep_planner.read_state(env).debris, []
         while not done:
             chunk = policy.act(obs["policy"])
             for a in chunk:
@@ -160,9 +170,16 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                 sim_action = torch.tensor(contract.from_lerobot_action(a, joint_pos), device=env.device)[None]
                 for _ in range(contract.SIM_STEPS_PER_FRAME):
                     # step の後は自動でリセットされるので、終わる前の個数を残しておく
-                    count = int(sweep_mdp.debris_in_target(env)[0].sum())
+                    inside = sweep_mdp.debris_in_target(env)[0]
+                    count = int(inside.sum())
                     state = sweep_planner.read_state(env)
                     base_min_dist = min(base_min_dist, float(np.linalg.norm(state.debris - state.base, axis=-1).min()))
+                    if args.videos and steps % contract.SIM_STEPS_PER_FRAME == 0:
+                        # 観測 (カメラ) は、この step を実行する前の状態のもの。図も同じ時点の真値で描く
+                        base_path.append(state.base)
+                        last = (state.debris, debris_start, inside.cpu().numpy(), state.target, np.array(base_path), state.theta)
+                        map_img = sweep_video.draw_map(*last, f"#{r} t={steps * env.step_dt:4.1f}s in={count}")
+                        video.write(*(obs["policy"][cam][0].cpu().numpy() for cam in contract.CAMERAS), map_img)
                     obs, _, terminated, truncated, _ = env.step(sim_action)
                     steps += 1
                     if terminated[0] or truncated[0]:
@@ -172,6 +189,11 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     break
         if success:
             count = max(count, sweep_mdp.SUCCESS_COUNT)
+        if args.videos:
+            video.close()
+            os.rename(video.path, f"{out_dir}/videos/round_{r:03d}_{'success' if success else 'failure'}.mp4")
+            # 最後に描いたフレームの状態に、ラウンドの結果を書き添える (自動リセットの後は、終わりの状態を読めない)
+            maps.append(sweep_video.draw_map(*last, f"#{r} {'S' if success else 'F'} {steps * env.step_dt:.1f}s in={count}"))
         result = {"round": r, "success": success, "in_target": count, "sim_time": round(steps * env.step_dt, 2),
                   "base_min_dist": round(base_min_dist, 3), "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
@@ -204,6 +226,8 @@ if args.policy == "remote":
 if args.record:
     summary.update(dataset_file=args.dataset_file, num_demos=n_ok,
                    dataset_bytes=os.path.getsize(args.dataset_file) if os.path.exists(args.dataset_file) else 0)
+if maps:
+    cv2.imwrite(f"{out_dir}/overview.png", cv2.cvtColor(sweep_video.overview(maps), cv2.COLOR_RGB2BGR))
 with open(f"{out_dir}/summary.json", "w") as f:
     json.dump(summary, f, indent=2)
 print(f"SWEEP {'DATAGEN' if args.record else 'EVAL'} {n_ok}/{n} ({p:.0%}, 95% CI {summary['ci95'][0]:.0%}-{summary['ci95'][1]:.0%}) "

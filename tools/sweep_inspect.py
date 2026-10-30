@@ -9,24 +9,17 @@
 import argparse
 import json
 import os
-import subprocess
 
 import cv2
 import h5py
 import numpy as np
 
 from leisaac_ext import contract
+from leisaac_ext.sweep_video import TARGET_HALF, VideoWriter, draw_map, overview
 
-# sweep_mdp.TARGET_HALF と IN_TARGET_MAX_Z と同じ値 (sweep_mdp は isaaclab を読み込むので、Kit なしでは import できない)
-TARGET_HALF = 0.15
+# sweep_mdp.IN_TARGET_MAX_Z と SUCCESS_COUNT と同じ値 (sweep_mdp は isaaclab を読み込むので、Kit なしでは import できない)
 IN_TARGET_MAX_Z = 0.05
 SUCCESS_COUNT = 8
-BASE_RADIUS = 0.165
-# 上から見た図の範囲 (env の原点からの m) と縮尺。配置の範囲 (sweep_floor) がすべて入る
-MAP_X = (-1.2, 1.2)
-MAP_Y = (-0.4, 2.6)
-MAP_SCALE = 80  # ピクセル/m
-MAP_SIZE = (round((MAP_Y[1] - MAP_Y[0]) * MAP_SCALE), round((MAP_X[1] - MAP_X[0]) * MAP_SCALE))  # (高さ, 幅)
 _BASE_IDX = [contract.SIM_JOINT_NAMES.index(j) for j in ("base_x", "base_y", "base_theta")]
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -57,44 +50,11 @@ def in_target(debris: np.ndarray, target: np.ndarray) -> np.ndarray:
     return inside & (debris[..., 2] < IN_TARGET_MAX_Z)
 
 
-def to_px(xy: np.ndarray) -> np.ndarray:
-    """env の原点からの位置 (m) -> 図のピクセル (x は右、y は上)"""
-    return np.stack([(xy[..., 0] - MAP_X[0]) * MAP_SCALE, (MAP_Y[1] - xy[..., 1]) * MAP_SCALE], axis=-1).round().astype(np.int32)
-
-
-def draw_map(seq: dict, t: int, label: str) -> np.ndarray:
-    """step t の上から見た図 (RGB)。目標領域は青、ゴミは目標領域の中なら緑、外なら赤、最初の位置は灰色の点、台車の通り道は黄色"""
-    img = np.full((*MAP_SIZE, 3), 245, np.uint8)
-    for v in np.arange(np.ceil(MAP_X[0] * 2) / 2, MAP_X[1], 0.5):
-        cv2.line(img, tuple(to_px(np.array([v, MAP_Y[0]]))), tuple(to_px(np.array([v, MAP_Y[1]]))), (225, 225, 225), 1)
-    for v in np.arange(np.ceil(MAP_Y[0] * 2) / 2, MAP_Y[1], 0.5):
-        cv2.line(img, tuple(to_px(np.array([MAP_X[0], v]))), tuple(to_px(np.array([MAP_X[1], v]))), (225, 225, 225), 1)
-    lo, hi = to_px(seq["target"][t] + [-TARGET_HALF, TARGET_HALF]), to_px(seq["target"][t] + [TARGET_HALF, -TARGET_HALF])
-    cv2.rectangle(img, tuple(lo), tuple(hi), (150, 180, 255), -1)
-    cv2.polylines(img, [to_px(seq["base"][: t + 1])], False, (230, 190, 0), 1)
-    center = to_px(seq["base"][t])
-    cv2.circle(img, tuple(center), round(BASE_RADIUS * MAP_SCALE), (120, 120, 120), 1)
-    heading = np.array([-np.sin(seq["theta"][t]), np.cos(seq["theta"][t])]) * BASE_RADIUS
-    cv2.line(img, tuple(center), tuple(to_px(seq["base"][t] + heading)), (120, 120, 120), 1)
-    for p in to_px(seq["debris"][0, :, :2]):
-        cv2.circle(img, tuple(p), 1, (160, 160, 160), -1)
+def map_at(seq: dict, t: int, label: str) -> np.ndarray:
+    """step t の上から見た図"""
     inside = in_target(seq["debris"][t], seq["target"][t])
-    for p, ok in zip(to_px(seq["debris"][t, :, :2]), inside):
-        cv2.rectangle(img, tuple(p - 2), tuple(p + 2), (0, 160, 0) if ok else (220, 0, 0), -1)
-    cv2.putText(img, label, (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
-    return img
-
-
-def write_video(path: str, frames) -> None:
-    """RGB のフレームを H.264 の mp4 にする (30fps、2 倍に拡大)"""
-    h, w = MAP_SIZE[0], contract.IMAGE_SHAPE[1] * 2 + MAP_SIZE[1]
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(contract.FPS),
-           "-i", "-", "-vf", "scale=iw*2:ih*2:flags=neighbor", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", path]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    for frame in frames:
-        proc.stdin.write(frame.tobytes())
-    proc.stdin.close()
-    assert proc.wait() == 0, f"ffmpeg failed: {path}"
+    return draw_map(seq["debris"][t, :, :2], seq["debris"][0, :, :2], inside, seq["target"][t], seq["base"][: t + 1],
+                    seq["theta"][t], label)
 
 
 os.makedirs(args.out_dir, exist_ok=True)
@@ -126,18 +86,16 @@ with h5py.File(args.dataset_file, "r") as f:
                 problems.append(f"episode {i}: obs/{cam} の形が {group[f'obs/{cam}'].shape}")
         if not group.attrs.get("success") or count[-1] < SUCCESS_COUNT:
             problems.append(f"episode {i}: 成功していない (success={group.attrs.get('success')}、最後の個数 {count[-1]})")
-        maps.append(draw_map(seq, steps - 1, f"#{i} {steps / 60:.1f}s in={count[-1]}"))
+        maps.append(map_at(seq, steps - 1, f"#{i} {steps / 60:.1f}s in={count[-1]}"))
         if i in videos:
             # gzip の塊ごとに展開されるので、1 フレームずつではなく、まとめて読む
             front, wrist = group["obs/front"][:], group["obs/wrist"][:]
-            frames = (np.concatenate([front[t], wrist[t], draw_map(seq, t, f"#{i} t={t / 60:4.1f}s in={count[t]}")], axis=1)
-                      for t in contract.frame_indices(steps))
-            write_video(f"{args.out_dir}/episode_{i:03d}.mp4", frames)
+            video = VideoWriter(f"{args.out_dir}/episode_{i:03d}.mp4")
+            for t in contract.frame_indices(steps):
+                video.write(front[t], wrist[t], map_at(seq, t, f"#{i} t={t / 60:4.1f}s in={count[t]}"))
+            video.close()
 
-cols = 10
-rows = [np.concatenate(maps[k : k + cols] + [np.full_like(maps[0], 255)] * (cols - len(maps[k : k + cols])), axis=1)
-        for k in range(0, len(maps), cols)]
-cv2.imwrite(f"{args.out_dir}/overview.png", cv2.cvtColor(np.concatenate(rows, axis=0), cv2.COLOR_RGB2BGR))
+cv2.imwrite(f"{args.out_dir}/overview.png", cv2.cvtColor(overview(maps), cv2.COLOR_RGB2BGR))
 for p in problems:
     print(f"[NG] {p}")
 print(f"SWEEP INSPECT {num - len({p.split(':')[0] for p in problems})}/{num} ok -> {args.out_dir} "

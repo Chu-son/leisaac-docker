@@ -373,6 +373,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act EVAL_ROUNDS=30   # 推論サーバを起動 (make policy-up) してから評価する
 make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act TRAIN_CHECKPOINT=020000   # 途中のチェックポイント
 make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act EVAL_SEED=1793361616      # シードを固定する (ラウンドごとの配置がそろう)
+make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act EVAL_VIDEOS=1             # ラウンドごとの動画も残す (計画器でも使える)
 make policy-down                                                                 # 推論サーバを止める (make down でも止まる)
 ```
 
@@ -381,6 +382,9 @@ make policy-down                                                                
 - 通信は `tools/leisaac_ext/remote.py`（ZMQ の REQ/REP。JSON のヘッダと、numpy の配列の生のバイト列）。sim は観測を学習データと同じ形（`contract.to_lerobot` の state と、240×320 の uint8 の画像）で送り、`predict_action_chunk` の先頭 `ACTION_HORIZON` 個（既定 16、約 0.53 秒分）を受け取ります。応答が `POLICY_TIMEOUT_MS` 以内になければ止めます。
 - `summary.json` には、サーバの情報（ポリシーの種類、チェックポイントの step、chunk の長さ、サーバの VRAM のピーク）と ACTION_HORIZON が残り、`rounds.jsonl` には推論の回数と平均の時間が残ります。
 - `make check` の 6 番目で、合成データで学習した ACT のチェックポイントを推論サーバに読ませ、action の系列が返ることを確かめます。
+- `EVAL_VIDEOS=1` で、ラウンドごとの動画 `videos/round_<番号>_<success|failure>.mp4`（front、wrist、上から見た図を横に並べた 30fps の実時間。`make sweep-inspect` の動画と同じ描き方で、`tools/leisaac_ext/sweep_video.py` を共有する）と、全ラウンドの終わりの図を並べた `overview.png`（S/F、時間、目標領域に入った個数）を残します。動画は 1 ラウンド 0.5〜1.5MB です。
+- シードがそろえるのは配置で、推論や物理の細かな違いで、その後の動きは分かれることがあります（[sweep_experiments.md](sweep_experiments.md) の注意）。
+- 実験の経緯と結果は [sweep_experiments.md](sweep_experiments.md) にまとめています。
 
 ### 結果（2026-10-30、P6c）
 
