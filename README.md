@@ -4,7 +4,7 @@
 
 - **sim**: Isaac Sim 5.1 + IsaacLab 2.3 + LeIsaac v0.4.0。テレオペ、リプレイ、推論クライアントを担当する
 - **gr00t**: GR00T N1.5 の推論サーバ。sim とは ZMQ の `:5555` で通信する
-- **train**: LeRobot 0.4.2。sim の記録を LeRobot 形式に変換し、ポリシー（ACT、SmolVLA、GR00T）を学習する（[docs/sweep.md](docs/sweep.md)）
+- **train**: LeRobot 0.4.2。sim の記録を LeRobot 形式に変換し、ポリシー（ACT、SmolVLA、GR00T）を学習する。学習したポリシーの推論サーバ（`:5556`）もこのイメージで動かす（[docs/sweep.md](docs/sweep.md)）
 
 3 つは `docker/Dockerfile` の multi-stage target として作ります。分けている理由は [docs/decisions.md](docs/decisions.md) を参照してください。
 
@@ -59,7 +59,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `list-envs` | タスクの一覧を表示する |
 | `smoke` | `TASK` をヘッドレスで作り、ゼロ action で数ステップ動かす（起動確認。`DEVICE` で action の構成を選ぶ） |
 | `sweep-check` | Sweep タスク（`LeIsaac-LeKiwi-Sweep-Floor-v0`）の確認。データの約束事と上流の変換の一致、ゴミの配置、成功の判定を確かめ、front と wrist の画像を `data/sweep/check/` に保存する（[docs/sweep.md](docs/sweep.md)） |
-| `sweep-eval` | Sweep タスクを計画器（特権情報を使う）で `EVAL_ROUNDS` 回解き、成功率を測る。結果は `data/sweep/eval/<日時>/` に残す |
+| `sweep-eval` | Sweep タスクを `EVAL_POLICY` で `EVAL_ROUNDS` 回解き、成功率を測る。`planner` は計画器（特権情報を使う）、`remote` は学習したポリシー（先に `policy-up` を実行する）。結果は `data/sweep/eval/<日時>/` に残す |
 | `datagen` | Sweep タスクの自動生成。計画器が成功したエピソードだけを `NUM` 個、`data/datasets/$(DATASET).hdf5` に記録する（例: `make datagen DATASET=sweep_floor NUM=50`） |
 | `sweep-replay` | `datagen` の記録を再生し、記録どおりに成功するかを確かめる。`EPISODES="0 3"` で選ぶ。`HEADLESS=0` で GUI に表示する |
 | `convert` | `datagen` の記録を LeRobot 形式（lerobot 0.4.2、v3.0、30fps、動画は AV1）に変換し、`data/lerobot/$(DATASET)/` に出力する。読み直して、すべてのフレームを HDF5 と照合する（train イメージ） |
@@ -68,10 +68,11 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `sweep-inspect` | `datagen` の記録を Kit なしで確かめる。一覧表、上から見た図（`overview.png`）、動画（`episode_*.mp4`）を `data/sweep/inspect/$(DATASET)/` に作る |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx`。再生は記録時と `SIM_DEVICE` が違えば止まる（`FORCE=1` で続行） |
 | `teleop-lekiwi` / `replay-lekiwi` | LeKiwi 用の別名。`TASK` を LeKiwi にし、`DEVICE=keyboard` / `gamepad` を LeKiwi 用に読み替えて teleop / replay を実行する。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する |
+| `policy-up` / `policy-down` / `policy-logs` | 学習したポリシー（`data/train/$(TRAIN_NAME)/checkpoints/$(TRAIN_CHECKPOINT)/`）の推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
 | `eval` | 閉ループ推論を実行する |
 | `config` | `.env` とコマンドラインを反映した、実際に使われる設定を表示する |
-| `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、LeKiwi の起動（Loft がなければ SKIP）、Sweep タスクの確認（`sweep-check`）、変換と学習の確認（train。合成データ）、VRAM ピークを確認する |
+| `check` | タスク一覧、サーバとの疎通と action の形状、ヘッドレス推論 1 ラウンド、LeKiwi の起動（Loft がなければ SKIP）、Sweep タスクの確認（`sweep-check`）、変換、学習、推論サーバの確認（train。合成データ）、VRAM ピークを確認する |
 | `lock` / `lock-check` | `docker/envs/*/uv.lock` を更新する / 最新であることを確認する |
 | `shell-sim` / `shell-gr00t` | コンテナのシェルに入る |
 
@@ -85,6 +86,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `POLICY_DIR` | `/workspace/data/policies/leisaac-pick-orange-v0` |
 | `TRAIN_POLICY` / `TRAIN_NAME` | `act` / `$(DATASET)-$(TRAIN_POLICY)` |
 | `TRAIN_STEPS` / `TRAIN_BATCH` | 空（ポリシーごとの既定。`tools/sweep_train.py`） |
+| `EVAL_POLICY` / `TRAIN_CHECKPOINT` | `planner` / `last`（`sweep-eval` のポリシーと、推論サーバが読むチェックポイント） |
 
 ## ディレクトリ構成
 
@@ -99,10 +101,11 @@ docker/
 tools/
   gr00t_server.py     # VRAM 節約のラッパーを付けて GR00T の推論サーバを起動する
   probe_gr00t.py      # サーバとの疎通と action の形状を確認する
+  policy_server.py    # make policy-up の本体（lerobot で学習したポリシーの推論サーバ。train イメージ）
   sim_smoke.py        # make smoke の本体（タスクを作り、ゼロ action で数ステップ動かす）
   leisaac_run.py      # sim のスクリプトを、自前のタスクを登録してから実行するラッパー（sim のコマンドはすべてこれを通る）
   leisaac_ext/        # 自前のタスク（Sweep。docs/sweep.md）
-                      #   contract.py: データの約束事、broom.py: 箒付きの LeKiwi、
+                      #   contract.py: データの約束事、remote.py: 推論サーバとの通信、broom.py: 箒付きの LeKiwi、
                       #   sweep_floor.py: 床のタスクの定義、sweep_mdp.py: 配置、ランダム化、成功の判定、
                       #   sweep_planner.py: 計画器
   sweep_check.py      # make sweep-check の本体
@@ -111,7 +114,7 @@ tools/
   sweep_inspect.py    # make sweep-inspect の本体（記録の一覧、図、動画。Kit なし）
   sweep_convert.py    # make convert の本体（HDF5 → LeRobot 形式と照合。train イメージ）
   sweep_train.py      # make train の本体（lerobot-train を呼ぶ。Colab でも同じものを使う）
-  train_check.py      # make check の 6 番目（contract と lerobot の LeKiwi の一致、合成データの変換と学習）
+  train_check.py      # make check の 6 番目（contract と lerobot の LeKiwi の一致、合成データの変換、学習、推論サーバ）
   fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
 notebooks/

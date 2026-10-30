@@ -1,6 +1,7 @@
 # leisaac-docker
 #   sim   : Isaac Sim + LeIsaac (テレオペ / リプレイ / 推論クライアント)。常駐させず、make が run --rm で都度実行する
 #   gr00t : GR00T N1.5 推論サーバ (profile: inference。sim と ZMQ :5555 で通信)
+#   policy: 学習したポリシー (lerobot) の推論サーバ (profile: inference。train のイメージ。ZMQ :5556)
 #   train : LeRobot (記録の変換と学習)。sim と同じく、make が run --rm で都度実行する
 
 # git の ref はここで一括管理する (Python パッケージのバージョンは docker/envs/*/pyproject.toml と uv.lock)。
@@ -72,6 +73,25 @@ services:
       - --port=5555
     healthcheck:
       test: ["CMD", "python", "/opt/tools/probe_gr00t.py", "--ping"]
+      interval: 10s
+      timeout: 10s
+      start_period: 180s
+      retries: 3
+
+  # 学習したポリシーの推論サーバ (profile: inference。sim と ZMQ :5556 で通信)。train のイメージを使う
+  policy:
+    <<: *gpu
+    profiles: [inference]
+    image: leisaac-train:latest
+    pull_policy: never
+    volumes:
+      - ./data:/workspace/data
+    command:
+      - python
+      - /opt/tools/policy_server.py
+      - --policy_path=${POLICY_MODEL:-/workspace/data/train/sweep_floor-act/checkpoints/last/pretrained_model}
+    healthcheck:
+      test: ["CMD", "python", "/opt/tools/policy_server.py", "--ping"]
       interval: 10s
       timeout: 10s
       start_period: 180s

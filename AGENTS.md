@@ -8,7 +8,7 @@ LeIsaac（Isaac Sim + IsaacLab）と GR00T N1.5 の推論サーバを Docker で
 - `assets.json`: 外部リソース（USD アセット、学習済みポリシー）の取得元とハッシュ。`make assets` で取得・検証する。新しいアセットを使うときはここに追記する。
 - `.env.example`: 設定の雛形。設定の入り口は `.env` とコマンドラインだけ（優先順位: コマンドライン > `.env` > 既定値）。`.env` は Makefile と compose の両方が読み、git には含めない。Makefile に変数を足したら、ここと `make config` にも書く。compose が参照する変数は Makefile で export する。
 - sim の設定（`SIM_DEVICE` など）は全タスクで共通にする。タスクごとの例外を作らない。
-- `compose.yaml`: サービスの定義と、git の ref（`x-versions`）。`gr00t` は profile `inference` に属する。
+- `compose.yaml`: サービスの定義と、git の ref（`x-versions`）。`gr00t` と `policy`（学習したポリシーの推論サーバ。train のイメージ、`tools/policy_server.py`）は profile `inference` に属する。
 - `tools/`: sim、gr00t、train のイメージに含まれ、`/opt/tools` に置かれる（変更したら `make build`）。check.sh と fetch_assets.py はホストで実行する。
 - sim のスクリプトは、すべて `tools/leisaac_run.py` を通して実行する（Makefile の `SIM_RUN`）。自前のタスク（`tools/leisaac_ext`、PYTHONPATH で読み込む）を登録してから、上流のスクリプトをそのまま実行する。上流のコードは変更しない。
 - `notebooks/train_colab.ipynb`: Colab での学習。公開リポジトリを clone し、train の uv.lock から環境を作って `tools/sweep_train.py` を実行する（docs/sweep.md）。

@@ -5,11 +5,13 @@
 - 学習するポリシー (ACT、SmolVLA、GR00T) を import でき、flash-attn (GR00T が使う) がこの GPU で動くこと
 - 合成した小さな HDF5 (datagen と同じ構成) を sweep_convert.py で変換し、照合が通ること (SWEEP CONVERT PASS)
 - 変換したデータで、sweep_train.py が ACT を数 step 学習し、チェックポイントを残すこと (SWEEP TRAIN OK)
+- そのチェックポイントを policy_server.py が読み、観測を送ると action の系列を返すこと (POLICY SERVER OK)
 """
 import os
 import subprocess
 import sys
 import tempfile
+import time
 
 import h5py
 import numpy as np
@@ -20,7 +22,7 @@ from lerobot.policies.groot.modeling_groot import GrootPolicy  # noqa: F401
 from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy  # noqa: F401
 from lerobot.robots.lekiwi import LeKiwiClient, LeKiwiClientConfig
 
-from leisaac_ext import contract
+from leisaac_ext import contract, remote
 
 robot = LeKiwiClient(LeKiwiClientConfig(remote_ip="127.0.0.1"))
 assert tuple(robot._state_ft) == contract.STATE_NAMES, f"state のキー名が実機と違う: {list(robot._state_ft)}"
@@ -76,4 +78,30 @@ with tempfile.TemporaryDirectory() as tmp:
         print(out.stderr[-3000:])
     checkpoint = f"{tmp}/train/checkpoints/last/pretrained_model/model.safetensors"
     assert out.returncode == 0 and os.path.isfile(checkpoint), "学習の確認に失敗 (チェックポイントがない)"
+
+    # ネットワークは host なので、動いているかもしれない推論サーバ (make policy-up) とは別のポートを使う
+    port = remote.PORT + 100
+    server = subprocess.Popen([sys.executable, "/opt/tools/policy_server.py", "--port", str(port),
+                               "--policy_path", os.path.dirname(checkpoint)],
+                              stdout=open(f"{tmp}/policy_server.log", "w"), stderr=subprocess.STDOUT)
+    server_ok = False
+    try:
+        client = remote.PolicyClient(port=port, timeout_ms=120000)
+        info = client.call("ping")[0]
+        client.call("reset")
+        h, w, _ = contract.IMAGE_SHAPE
+        arrays = {"observation.state": rng.uniform(-50, 50, len(contract.STATE_NAMES)).astype(np.float32),
+                  **{f"observation.images.{cam}": rng.integers(0, 256, (h, w, 3), dtype=np.uint8) for cam in contract.CAMERAS}}
+        t = time.time()
+        header, action = client.call("act", arrays, task=contract.INSTRUCTION, robot_type="lekiwi_client", horizon=8)
+        action = action["action"]
+        assert action.shape == (8, len(contract.ACTION_NAMES)) and np.isfinite(action).all(), f"action が不正: {action.shape}"
+        print(f"POLICY SERVER OK {info['policy_type']} checkpoint {info['checkpoint']}: action {list(action.shape)} "
+              f"in {(time.time() - t) * 1000:.0f}ms")
+        server_ok = True
+    finally:
+        server.terminate()
+        server.wait(timeout=30)
+        if not server_ok:
+            print(open(f"{tmp}/policy_server.log").read()[-3000:])
 print("TRAIN CHECK OK")

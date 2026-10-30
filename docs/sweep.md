@@ -149,7 +149,7 @@ sim、変換、学習、推論のすべてが、このファイルの定義に�
 ## 評価（`tools/sweep_eval.py`、`make sweep-eval`）
 
 - `make sweep-eval EVAL_ROUNDS=30` で、計画器に 30 ラウンド解かせる。結果は `data/sweep/eval/<日時>/` の `rounds.jsonl`（ラウンドごと）と `summary.json`（成功率と 95% 信頼区間（Wilson）など）に残す。
-- ポリシーのインタフェースは `reset()` と `act(obs) → [T, 9]`（contract の LeRobot 形式の action）。T 個の action を、それぞれ 2 step（30fps）ずつ続ける。いまのバックエンドは `planner` だけで、学習したポリシーにつなぐ `remote` は P6 で足す。
+- ポリシーのインタフェースは `reset()` と `act(obs) → [T, 9]`（contract の LeRobot 形式の action）。T 個の action を、それぞれ 2 step（30fps）ずつ続ける。バックエンドは `planner`（計画器）と `remote`（学習したポリシーの推論サーバ。下の「学習したポリシーの評価」）。
 - 成功は終了条件 `success`（8 個以上）。25 秒で時間切れ。
 - ラウンドごとの指標: 成功、目標領域に入った個数、かかった時間、`base_min_dist`（台車の中心から最も近いゴミまでの距離の最小値。0.165m 未満なら、ゴミに当たったか、台車の下にくぐらせた）。
 
@@ -354,6 +354,28 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 | ローカルの train コンテナ（Drive のマウントだけ飛ばす。RTX 5070、ドライバ 580） | commit 7488f50、ACT 50 step | clone から保存まで通る。`uv sync --locked` は約 3 分（キャッシュなし）。学習 12 秒。tar 591MB（最後のチェックポイントだけ）。`make import-policy` で取り込めた |
 | Colab（L4、ドライバ 580.82.07、compute capability 8.9） | commit 9cd99cd、ACT 50 step | 通る（ENV OK、学習を含めて sweep_train.py が 26 秒）。Drive の tar をダウンロードし、`make import-policy` で取り込めた |
 
+## 学習したポリシーの評価（`tools/policy_server.py`、`make sweep-eval EVAL_POLICY=remote`）
+
+```bash
+make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act EVAL_ROUNDS=30   # 推論サーバを起動 (make policy-up) してから評価する
+make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor-act TRAIN_CHECKPOINT=020000   # 途中のチェックポイント
+make policy-down                                                                 # 推論サーバを止める (make down でも止まる)
+```
+
+- 推論サーバ（compose の `policy`、profile `inference`）は train のイメージで動き、`data/train/<TRAIN_NAME>/checkpoints/<TRAIN_CHECKPOINT>/pretrained_model` を読みます。TRAIN_NAME か TRAIN_CHECKPOINT を変えて `make policy-up` すると、作り直されます。GR00T の推論サーバ（:5555）とは別のポート（:5556）なので、同時に起動できます。
+- ポリシーと一緒に、学習のときに保存された前処理と後処理（正規化、SmolVLA のカメラ名の読み替えと言語のトークン化）を読むので、学習と同じ変換になります。GR00T（lerobot 版）は、読み込むときにデータセットの統計を渡す必要があるので、P6f で扱います（いまはサーバが止める）。
+- 通信は `tools/leisaac_ext/remote.py`（ZMQ の REQ/REP。JSON のヘッダと、numpy の配列の生のバイト列）。sim は観測を学習データと同じ形（`contract.to_lerobot` の state と、240×320 の uint8 の画像）で送り、`predict_action_chunk` の先頭 `ACTION_HORIZON` 個（既定 16、約 0.53 秒分）を受け取ります。応答が `POLICY_TIMEOUT_MS` 以内になければ止めます。
+- `summary.json` には、サーバの情報（ポリシーの種類、チェックポイントの step、chunk の長さ、サーバの VRAM のピーク）と ACTION_HORIZON が残り、`rounds.jsonl` には推論の回数と平均の時間が残ります。
+- `make check` の 6 番目で、合成データで学習した ACT のチェックポイントを推論サーバに読ませ、action の系列が返ることを確かめます。
+
+### 結果（2026-10-30、P6c）
+
+| 実行 | 結果 |
+|---|---|
+| `make sweep-eval EVAL_POLICY=remote TRAIN_NAME=p6a-act-300 EVAL_ROUNDS=2`（P6a の ACT 300 step） | 最後まで動く（0/2。2 ラウンドとも 25 秒の時間切れ。1 ラウンドあたり推論 47 回、1 回 22〜26ms）。2 ラウンドの実時間 40 秒 |
+| VRAM（nvidia-smi で 2 秒ごと） | 全体のピーク 4.0GB: sim 約 2.0GB、推論サーバ（ACT）約 0.5GB、画面など約 1.6GB |
+| 推論サーバだけ（データセットのフレームを送る） | ACT: 読み込み 0.5 秒、torch の確保 0.2GB、推論 1 回 40〜50ms（初回 270ms）。SmolVLA（P6a の 2 step）: 読み込み 9.5 秒、1.6GB、1 回 100〜120ms（初回 490ms） |
+
 ## 実機との差（既知）
 
 | 項目 | sim | 実機 | 対応 |
@@ -373,6 +395,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 | 計画器の評価 30 ラウンド | 同上 | 同上 | 約 6 分（実測） | — |
 | 自動生成 50 エピソード | 同上 | 同上 | 13.8 分（実測） | 1.74GB（実測） |
 | 変換（train） | 0 | 未測定（1 エピソードずつ読むので、数 GB 以下の見込み） | 5.4 分（照合を含む。実測） | 41MB（実測） |
+| sim + 推論サーバ（ACT） | 全体のピーク 4.0GB（実測。sim 約 2.0GB、サーバ約 0.5GB、画面など約 1.6GB） | — | 2 ラウンドで 40 秒（実測） | — |
 | ACT の学習（batch 8） | 2.7GB（実測。sim は停止） | 未測定 | 100,000 step で約 72 分の見込み（300 step の実測から） | チェックポイント 1 つ約 0.6GB（実測） |
 | sim + GR00T の推論 | 約 10〜11GB | 約 23GB | — | — |
 
@@ -389,7 +412,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 | P3 | 計画器と評価（`tools/sweep_eval.py`）。30 ラウンドで成功率 70% 以上 | 完了（30/30） |
 | P4 | 自動生成 50 エピソード（`make datagen`）と、その確認（`make sweep-inspect`、`make sweep-replay`） | 完了（50 エピソード、再生 20/20） |
 | P5 | 変換（`docker/envs/train`、`make convert`） | 完了（50 エピソード、照合 PASS） |
-| P6 | ポリシーの学習と評価（下の「P6 の計画」） | 進行中（P6a、P6b 完了） |
+| P6 | ポリシーの学習と評価（下の「P6 の計画」） | 進行中（P6a〜P6c 完了） |
 | P7 | 段差、Loft でのデータの取り直し、テレオペのデータ、ランダム化をすべて有効にする、実機への展開 | 後で |
 
 ### P6 の計画（2026-10-30 に決定）
@@ -400,7 +423,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 |---|---|---|
 | P6a | train に SmolVLA と GR00T の依存を足す。`tools/sweep_train.py` と `make train TRAIN_POLICY=act\|smolvla\|groot`、`make colab-data`、`make import-policy`（完了。上の「学習」） | ローカル |
 | P6b | `notebooks/train_colab.ipynb`。最初に GPU、CUDA ドライバ、flash-attn を確かめ、数十 step 学習する（完了。上の「Colab での学習」） | Colab（L4） |
-| P6c | 推論サーバ（`tools/policy_server.py`、ZMQ）と `sweep_eval` の remote バックエンド。学習途中の ACT で評価が最後まで動くこと | ローカル |
+| P6c | 推論サーバ（`tools/policy_server.py`、ZMQ）と `sweep_eval` の remote バックエンド。学習途中の ACT で評価が最後まで動くこと（完了。上の「学習したポリシーの評価」） | ローカル |
 | P6d | ACT を学習し、30 ラウンドで評価する | ローカル |
 | P6e | SmolVLA を学習し、同じ条件で評価する | Colab（L4）→ ローカル |
 | P6f | GR00T N1.5（lerobot 版）を学習し、評価する。sim と同時にローカルで推論できるかを測る（足りなければ、lm_head の差し替えを移すか、Isaac-GR00T 版に切り替える） | Colab（A100）→ ローカル |

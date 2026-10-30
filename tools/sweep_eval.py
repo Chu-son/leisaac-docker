@@ -5,7 +5,8 @@
 ポリシーは reset() と act(obs) -> [T, 9] (contract の LeRobot 形式の action) を持つ。T 個の action を、
 それぞれ contract.SIM_STEPS_PER_FRAME step ずつ続ける。学習したポリシーも計画器も、同じ経路で評価する。
     planner: 計画器 (leisaac_ext.sweep_planner)。sim の真値を読む
-    (remote: ACT や GR00T のサーバにつなぐ。P6 で足す)
+    remote:  推論サーバ (tools/policy_server.py。make policy-up) につなぐ。観測 (カメラと関節の状態) だけを送り、
+             action の系列の先頭 action_horizon 個を受け取る (leisaac_ext.remote)
 成功は終了条件 success (10 個中 8 個以上が目標領域に入る)。時間切れ (25 秒) は失敗。
 結果は out_dir の rounds.jsonl (ラウンドごと) と summary.json に残す。
 --record を付けると、成功したエピソードだけを HDF5 に記録する (isaaclab の RecorderManager。上流の teleop と同じ形式)。
@@ -17,7 +18,11 @@ from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("--task", default="LeIsaac-LeKiwi-Sweep-Floor-v0")
-parser.add_argument("--policy", default="planner", choices=["planner"])
+parser.add_argument("--policy", default="planner", choices=["planner", "remote"])
+parser.add_argument("--policy_host", default="localhost", help="推論サーバ (--policy remote)")
+parser.add_argument("--policy_port", type=int, default=5556, help="推論サーバのポート (leisaac_ext.remote.PORT)")
+parser.add_argument("--policy_timeout_ms", type=int, default=15000)
+parser.add_argument("--action_horizon", type=int, default=16, help="1 回の推論で実行する action の数 (--policy remote)")
 parser.add_argument("--rounds", type=int, default=None, help="ラウンド数 (既定は 10。--record では上限で、既定は num_demos の 2 倍 + 10)")
 parser.add_argument("--seed", type=int, default=None, help="乱数のシード (省略時は現在時刻)")
 parser.add_argument("--randomize", default=None, help="追加のランダム化の項目 (カンマ区切り。all ですべて。省略時はタスクの既定)")
@@ -42,7 +47,7 @@ from isaaclab.managers import DatasetExportMode
 from isaaclab_tasks.utils import parse_env_cfg
 
 import leisaac  # noqa: F401
-from leisaac_ext import contract, sweep_floor, sweep_mdp, sweep_planner
+from leisaac_ext import contract, remote, sweep_floor, sweep_mdp, sweep_planner
 
 
 class PlannerPolicy:
@@ -63,6 +68,36 @@ class PlannerPolicy:
 
     def info(self) -> dict:
         return {"passes": self.planner.passes, "phase": self.planner.phase}
+
+
+class RemotePolicy:
+    """推論サーバのポリシー。学習データと同じ形 (contract.to_lerobot の state と、[240, 320, 3] uint8 の画像) で観測を送る"""
+
+    def __init__(self, host: str, port: int, timeout_ms: int, horizon: int):
+        self.client = remote.PolicyClient(host, port, timeout_ms)
+        self.server = self.client.call("ping")[0]
+        self.horizon = horizon
+
+    def reset(self) -> None:
+        self.client.call("reset")
+        self.infer_ms = []
+
+    def act(self, obs) -> np.ndarray:
+        joint_pos = obs["joint_pos"][0].cpu().numpy().astype(np.float64)
+        joint_vel = obs["joint_vel"][0].cpu().numpy().astype(np.float64)
+        state, _ = contract.to_lerobot(joint_pos, joint_vel, np.zeros(len(contract.ACTION_NAMES)))
+        arrays = {"observation.state": state}
+        for cam in contract.CAMERAS:
+            image = obs[cam][0].cpu().numpy()
+            assert image.shape == contract.IMAGE_SHAPE and image.dtype == np.uint8, f"{cam}: {image.shape} {image.dtype}"
+            arrays[f"observation.images.{cam}"] = image
+        header, out = self.client.call("act", arrays, task=contract.INSTRUCTION, robot_type="lekiwi_client",
+                                       horizon=self.horizon)
+        self.infer_ms.append(header["infer_ms"])
+        return out["action"]
+
+    def info(self) -> dict:
+        return {"chunks": len(self.infer_ms), "infer_ms": round(float(np.mean(self.infer_ms)), 1) if self.infer_ms else None}
 
 
 seed = args.seed if args.seed is not None else int(time.time())
@@ -95,8 +130,12 @@ if args.randomize is not None:
 env = gym.make(args.task, cfg=cfg).unwrapped
 # 計画器の IK (calibrate_arm) は関節の状態を書き換える。その後の reset で元に戻る
 env.reset()
-policy = PlannerPolicy(env)
-print(f"policy={args.policy} seed={seed} brush tip (base frame)={policy.poses.tip.round(3).tolist()}", flush=True)
+if args.policy == "planner":
+    policy = PlannerPolicy(env)
+    print(f"policy=planner seed={seed} brush tip (base frame)={policy.poses.tip.round(3).tolist()}", flush=True)
+else:
+    policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon)
+    print(f"policy=remote seed={seed} action_horizon={args.action_horizon} server={policy.server}", flush=True)
 # 2 ラウンド目からは、前のラウンドの終わりの自動リセットが返した観測から始める。env.reset() を重ねると、
 # 記録中のエピソード (初期状態だけ) が、前のラウンドの success の値 (リセットでは消えない) で書き出される
 obs, _ = env.reset()
@@ -145,7 +184,7 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         log.write(json.dumps(result) + "\n")
         log.flush()
         print(f"round {r}: {'success' if success else 'failure'} in_target={count} sim_time={result['sim_time']}s "
-              f"base_min_dist={result['base_min_dist']:.3f}m passes={result['passes']} phase={result['phase']} ({n_ok}/{len(results)})", flush=True)
+              f"base_min_dist={result['base_min_dist']:.3f}m " + " ".join(f"{k}={v}" for k, v in policy.info().items()) + f" ({n_ok}/{len(results)})", flush=True)
 
 n, n_ok = len(results), sum(x["success"] for x in results)
 # 成功率の 95% 信頼区間 (Wilson)
@@ -159,6 +198,9 @@ summary = {"task": args.task, "policy": args.policy, "seed": seed, "rounds": n, 
            # 台車がゴミに当たった (台車の中心から最も近いゴミまでが、外形の半径未満の) ラウンドの数
            "base_contact_rounds": sum(x["base_min_dist"] < sweep_planner.BASE_RADIUS for x in results),
            "wall_time": round(time.time() - start, 1), "device": args.device}
+if args.policy == "remote":
+    # ping は、ここまでの推論サーバの VRAM のピークも返す
+    summary.update(action_horizon=args.action_horizon, server=policy.client.call("ping")[0])
 if args.record:
     summary.update(dataset_file=args.dataset_file, num_demos=n_ok,
                    dataset_bytes=os.path.getsize(args.dataset_file) if os.path.exists(args.dataset_file) else 0)

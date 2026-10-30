@@ -28,6 +28,10 @@ INSTRUCTION       ?= Pick up the orange and place it on the plate
 POLICY_HOST       ?= localhost
 POLICY_TIMEOUT_MS ?= 15000
 ACTION_HORIZON    ?= 16
+# Sweep タスクの評価 (sweep-eval) のポリシー。planner (計画器) か remote (推論サーバ。make policy-up)。
+# remote の推論サーバは、data/train/$(TRAIN_NAME)/checkpoints/$(TRAIN_CHECKPOINT)/ を読む
+EVAL_POLICY       ?= planner
+TRAIN_CHECKPOINT  ?= last
 
 # --- 学習 (train)。出力先は data/train/$(TRAIN_NAME)/。TRAIN_STEPS / TRAIN_BATCH が空なら sweep_train.py の既定
 TRAIN_POLICY ?= act
@@ -40,6 +44,10 @@ FILE         ?=
 # --- その他
 GROUP   ?=
 UPGRADE ?= 0
+
+# 推論サーバ (policy) が読むチェックポイント
+POLICY_CHECKPOINT := data/train/$(TRAIN_NAME)/checkpoints/$(TRAIN_CHECKPOINT)
+export POLICY_MODEL := /workspace/$(POLICY_CHECKPOINT)/pretrained_model
 
 # compose が make と同じ値を使うよう、compose.yaml が参照する変数を渡す (空なら compose.yaml の既定値)
 export LEADER_PORT POLICY_DIR GR00T_DATA_CONFIG
@@ -87,7 +95,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen sweep-replay sweep-inspect convert train colab-data import-policy teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen sweep-replay sweep-inspect convert train colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -98,7 +106,7 @@ help:
 	@echo "  list-envs        登録済みタスク一覧"
 	@echo "  smoke            TASK をヘッドレスで作り、ゼロ action で数ステップ動かす (起動確認)"
 	@echo "  sweep-check      Sweep タスクの確認 (contract と上流の一致、配置、成功判定。画像は data/sweep/check/)"
-	@echo "  sweep-eval       Sweep タスクを計画器で EVAL_ROUNDS 回解き、成功率を測る (結果は data/sweep/eval/<日時>/)"
+	@echo "  sweep-eval       Sweep タスクを EVAL_POLICY=$(EVAL_POLICY) (planner|remote) で EVAL_ROUNDS 回解き、成功率を測る (-> data/sweep/eval/<日時>/)"
 	@echo "  datagen          Sweep タスクの自動生成。計画器が成功したエピソードを NUM=$(NUM) 個記録する (-> $(DATASET_PATH))"
 	@echo "  sweep-replay     datagen の記録を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
 	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
@@ -106,6 +114,7 @@ help:
 	@echo "  train            data/lerobot/$(DATASET) で TRAIN_POLICY=$(TRAIN_POLICY) (act|smolvla|groot) を学習する (-> data/train/$(TRAIN_NAME)/)"
 	@echo "  colab-data       data/lerobot/$(DATASET) を 1 つの tar にする (Colab 用。-> data/colab/$(DATASET).tar。Drive へは手動で上げる)"
 	@echo "  import-policy    Colab の学習結果 FILE=<tar> を data/train/$(TRAIN_NAME)/ に展開する"
+	@echo "  policy-up/-down  学習したポリシーの推論サーバの起動 (healthy まで待つ。$(POLICY_CHECKPOINT)) / 停止"
 	@echo "  teleop           テレオペ + 記録 (TASK=$(TASK) DEVICE=$(DEVICE) -> $(DATASET_PATH)。追記は RESUME=1)"
 	@echo "                   SO101 Leader を使うときは DEVICE=so101leader LEADER_PORT=$(LEADER_PORT)"
 	@echo "  replay           記録データの再生 (記録時と SIM_DEVICE が違えば止める。FORCE=1 で続行)"
@@ -127,6 +136,7 @@ config:
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
+	@echo "             EVAL_POLICY=$(EVAL_POLICY) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
 	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
@@ -163,9 +173,10 @@ smoke:
 sweep-check:
 	$(call SIM_RUN,leisaac-sweep-check) /opt/tools/sweep_check.py $(SIM_ARGS) --enable_cameras --headless
 
-# Sweep タスクの評価。いまは計画器 (特権情報を使う) だけ。学習したポリシーは P6 で足す (docs/sweep.md)
-sweep-eval:
-	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=planner --rounds=$(EVAL_ROUNDS) \
+# Sweep タスクの評価。EVAL_POLICY=planner は計画器 (特権情報を使う)、remote は学習したポリシー (推論サーバを先に起動する)
+sweep-eval: $(if $(filter remote,$(EVAL_POLICY)),policy-up)
+	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) \
+		$(if $(filter remote,$(EVAL_POLICY)),--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON)) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
 # Sweep タスクの自動生成 (sweep_eval.py --record)。成功したエピソードだけを記録する。上書きも追記もしない。
@@ -261,6 +272,19 @@ replay-lekiwi:
 # assets.json の外部リソース (USD アセット、学習済みポリシー) を取得して検証する。GROUP=pick-orange のように絞れる
 assets:
 	python3 tools/fetch_assets.py $(foreach g,$(GROUP),--group $(g))
+
+# 学習したポリシー (data/train/$(TRAIN_NAME)/) の推論サーバ。TRAIN_NAME か TRAIN_CHECKPOINT を変えると作り直す
+policy-up:
+	@if [ ! -f "$(POLICY_CHECKPOINT)/pretrained_model/config.json" ]; then \
+		echo "[エラー] $(POLICY_CHECKPOINT)/pretrained_model がありません (TRAIN_NAME と TRAIN_CHECKPOINT を確かめてください)"; exit 1; \
+	fi
+	$(COMPOSE) --profile inference up -d --wait policy
+
+policy-down:
+	$(COMPOSE) --profile inference stop policy
+
+policy-logs:
+	$(COMPOSE) --profile inference logs -f policy
 
 gr00t-up:
 	$(COMPOSE) --profile inference up -d --wait gr00t
