@@ -333,8 +333,25 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
 | P3 | 計画器と評価（`tools/sweep_eval.py`）。30 ラウンドで成功率 70% 以上 | 完了（30/30） |
 | P4 | 自動生成 50 エピソード（`make datagen`）と、その確認（`make sweep-inspect`、`make sweep-replay`） | 完了（50 エピソード、再生 20/20） |
 | P5 | 変換（`docker/envs/train`、`make convert`） | 完了（50 エピソード、照合 PASS） |
-| P6 | ポリシーの選択と学習（ユーザーが判断する） | 未着手 |
+| P6 | ポリシーの学習と評価（下の「P6 の計画」） | 未着手 |
 | P7 | 段差、Loft でのデータの取り直し、テレオペのデータ、ランダム化をすべて有効にする、実機への展開 | 後で |
+
+### P6 の計画（2026-10-30 に決定）
+
+ポリシーはすべて lerobot 0.4.2 で学習し、同じ推論サーバと `sweep_eval` で評価する。ACT はローカルで、SmolVLA と GR00T N1.5 は Colab Pro で学習する。学習の本体は Docker なしでも動くスクリプトにして、ローカルと Colab で共通にする。
+
+| # | 内容 | 場所 |
+|---|---|---|
+| P6a | train に SmolVLA と GR00T の依存を足す。`tools/sweep_train.py` と `make train POLICY=act\|smolvla\|groot`、`make colab-data`、`make import-policy` | ローカル |
+| P6b | `notebooks/train_colab.ipynb`。最初に GPU、CUDA ドライバ（cu128 の torch には 570 以降が要る）、flash-attn を確かめ、数十 step 学習する | Colab（L4） |
+| P6c | 推論サーバ（`tools/policy_server.py`、ZMQ）と `sweep_eval` の remote バックエンド。学習途中の ACT で評価が最後まで動くこと | ローカル |
+| P6d | ACT を学習し、30 ラウンドで評価する | ローカル |
+| P6e | SmolVLA を学習し、同じ条件で評価する | Colab（L4）→ ローカル |
+| P6f | GR00T N1.5（lerobot 版）を学習し、評価する。sim と同時にローカルで推論できるかを測る（足りなければ、lm_head の差し替えを移すか、Isaac-GR00T 版に切り替える） | Colab（A100）→ ローカル |
+| P6g | 比べて、次（π0 を試すか、P7 に進むか）をユーザーが判断する | — |
+
+- 成功率に合否の線は設けず、docs/evaluation.md に従って比べる。π0 / π0.5 は P6 の対象外（学習はローカルでは無理。推論も sim と同時では 12GB でぎりぎり）。
+- 受け渡し: コードは公開リポジトリ（GitHub）から、トークンなしで clone する。データ（`make colab-data` の tar）の Drive へのアップロードと、結果の tar のダウンロードは、ブラウザで手動で行う。Colab から Drive へは `drive.mount`（許可画面で承認する）。トークンは作らない。
 
 ### Loft でのデータの取り直し（P7、2026-10-30 に決定）
 
