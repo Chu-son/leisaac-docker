@@ -352,7 +352,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 | 場所 | 実行 | 結果 |
 |---|---|---|
 | ローカルの train コンテナ（Drive のマウントだけ飛ばす。RTX 5070、ドライバ 580） | commit 7488f50、ACT 50 step | clone から保存まで通る。`uv sync --locked` は約 3 分（キャッシュなし）。学習 12 秒。tar 591MB（最後のチェックポイントだけ）。`make import-policy` で取り込めた |
-| Colab（L4） | ACT か SmolVLA を数十 step | （ユーザーが実行する） |
+| Colab（L4、ドライバ 580.82.07、compute capability 8.9） | commit 9cd99cd、ACT 50 step | 通る（ENV OK、学習を含めて sweep_train.py が 26 秒）。Drive の tar をダウンロードし、`make import-policy` で取り込めた |
 
 ## 実機との差（既知）
 
@@ -389,7 +389,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 | P3 | 計画器と評価（`tools/sweep_eval.py`）。30 ラウンドで成功率 70% 以上 | 完了（30/30） |
 | P4 | 自動生成 50 エピソード（`make datagen`）と、その確認（`make sweep-inspect`、`make sweep-replay`） | 完了（50 エピソード、再生 20/20） |
 | P5 | 変換（`docker/envs/train`、`make convert`） | 完了（50 エピソード、照合 PASS） |
-| P6 | ポリシーの学習と評価（下の「P6 の計画」） | 進行中（P6a 完了） |
+| P6 | ポリシーの学習と評価（下の「P6 の計画」） | 進行中（P6a、P6b 完了） |
 | P7 | 段差、Loft でのデータの取り直し、テレオペのデータ、ランダム化をすべて有効にする、実機への展開 | 後で |
 
 ### P6 の計画（2026-10-30 に決定）
@@ -399,7 +399,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 | # | 内容 | 場所 |
 |---|---|---|
 | P6a | train に SmolVLA と GR00T の依存を足す。`tools/sweep_train.py` と `make train TRAIN_POLICY=act\|smolvla\|groot`、`make colab-data`、`make import-policy`（完了。上の「学習」） | ローカル |
-| P6b | `notebooks/train_colab.ipynb`。最初に GPU、CUDA ドライバ、flash-attn を確かめ、数十 step 学習する（ローカルでの再現は完了。上の「Colab での学習」） | Colab（L4） |
+| P6b | `notebooks/train_colab.ipynb`。最初に GPU、CUDA ドライバ、flash-attn を確かめ、数十 step 学習する（完了。上の「Colab での学習」） | Colab（L4） |
 | P6c | 推論サーバ（`tools/policy_server.py`、ZMQ）と `sweep_eval` の remote バックエンド。学習途中の ACT で評価が最後まで動くこと | ローカル |
 | P6d | ACT を学習し、30 ラウンドで評価する | ローカル |
 | P6e | SmolVLA を学習し、同じ条件で評価する | Colab（L4）→ ローカル |
