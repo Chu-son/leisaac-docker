@@ -58,6 +58,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `list-envs` | タスクの一覧を表示する |
 | `smoke` | `TASK` をヘッドレスで作り、ゼロ action で数ステップ動かす（起動確認。`DEVICE` で action の構成を選ぶ） |
 | `sweep-check` | Sweep タスク（`LeIsaac-LeKiwi-Sweep-Floor-v0`）の確認。データの約束事と上流の変換の一致、ゴミの配置、成功の判定を確かめ、front と wrist の画像を `data/sweep/check/` に保存する（[docs/sweep.md](docs/sweep.md)） |
+| `sweep-eval` | Sweep タスクを計画器（特権情報を使う）で `EVAL_ROUNDS` 回解き、成功率を測る。結果は `data/sweep/eval/<日時>/` に残す |
 | `teleop` / `replay` | テレオペと記録 / 記録したデータの再生。Leader は `DEVICE=so101leader LEADER_PORT=/dev/ttyACMx`。再生は記録時と `SIM_DEVICE` が違えば止まる（`FORCE=1` で続行） |
 | `teleop-lekiwi` / `replay-lekiwi` | LeKiwi 用の別名。`TASK` を LeKiwi にし、`DEVICE=keyboard` / `gamepad` を LeKiwi 用に読み替えて teleop / replay を実行する。事前に `make assets GROUP=lekiwi` で Loft シーン（約 4.2GB）を取得する |
 | `gr00t-up` / `gr00t-down` / `gr00t-logs` | 推論サーバを起動して healthy まで待つ / 停止する / ログを表示する |
@@ -93,8 +94,10 @@ tools/
   leisaac_run.py      # sim のスクリプトを、自前のタスクを登録してから実行するラッパー（sim のコマンドはすべてこれを通る）
   leisaac_ext/        # 自前のタスク（Sweep。docs/sweep.md）
                       #   contract.py: データの約束事、broom.py: 箒付きの LeKiwi、
-                      #   sweep_floor.py: 床のタスクの定義、sweep_mdp.py: 配置、ランダム化、成功の判定
+                      #   sweep_floor.py: 床のタスクの定義、sweep_mdp.py: 配置、ランダム化、成功の判定、
+                      #   sweep_planner.py: 計画器
   sweep_check.py      # make sweep-check の本体
+  sweep_eval.py       # make sweep-eval の本体（ポリシーに N ラウンド解かせて成功率を測る）
   fetch_assets.py     # make assets の本体（標準ライブラリのみ。ホストの python3 で動く）
   check.sh            # make check の本体
 data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）

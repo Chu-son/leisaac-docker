@@ -117,7 +117,9 @@ def randomize_color(
     """
     asset = env.scene[asset_cfg.name]
     for env_id in env_ids.tolist():
-        root = env.scene.stage.GetPrimAtPath(asset.cfg.prim_path.replace("{ENV_REGEX_NS}", env.scene.env_prim_paths[env_id]))
+        # シーンを作った後の prim_path は、{ENV_REGEX_NS} が env_regex_ns (/World/envs/env_.*) に置き換わっている
+        root = env.scene.stage.GetPrimAtPath(asset.cfg.prim_path.replace(env.scene.env_regex_ns, env.scene.env_prim_paths[env_id]))
+        assert root.IsValid(), f"prim not found: {asset.cfg.prim_path} (env {env_id})"
         color = Gf.Vec3f(*[_uniform(*color_range[c], 1, "cpu").item() for c in "rgb"])
         for prim in Usd.PrimRange(root):
             if prim.IsA(UsdShade.Shader):
