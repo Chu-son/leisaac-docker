@@ -1,7 +1,10 @@
 """Sweep の計画器 (特権情報を使う古典的な手法)。docs/sweep.md の「計画器」
 
-1 回の掃き: 穂を上げたまま台車を開始位置へ動かし、穂を床に押し当てて、台車をまっすぐ前に進め、
+1 回の掃き: アームを移動の姿勢にして台車を開始位置へ動かし、穂を床に押し当てて、台車をまっすぐ前に進め、
 穂先の前のゴミを目標領域まで押す。穂を上げて、次の掃きを選ぶ。これを繰り返す。
+- 移動の間は、学習するポリシーが front カメラでゴミを見失わないようにする (docs/sweep_experiments.md の実験 6)。
+  アームは穂が front カメラの床を隠さない姿勢 (既定の姿勢) にし、台車は押し終わっていないゴミの方を向けたまま動かす
+  (台車は全方向に動けるので、向きと通り道は独立に決められる)。
 - 入力は SweepState (ゴミの位置、目標領域の位置、台車の姿勢、アームの関節位置) だけで、シーンに依存しない。
   位置は env の原点からの相対値 (m)。台車の向き theta は base_theta (0 で +y を向く。前は (-sin, cos)、右は (cos, sin))。
 - 出力は sim の action (lekiwi-leader の構成、9 次元。台車の速度はワールド座標系)。
@@ -38,6 +41,11 @@ ANGULAR_ACCEL = 4.0
 # アームの動きの時間 (s)
 ARM_INIT_TIME = 1.0
 ARM_MOVE_TIME = 0.5
+# 移動の姿勢と、穂を上げた姿勢の間。穂を上げた後は台車を動かしながら移動の姿勢へ移し、開始位置の LOOK_NEAR 手前から戻す
+ARM_TRAVEL_TIME = 1.0
+# 移動の間、台車をゴミの方へ向ける。開始位置までの距離が LOOK_FAR より近くなったら掃く向きへ切り替え始め、LOOK_NEAR で切り替え終わる
+LOOK_FAR = 0.4
+LOOK_NEAR = 0.15
 
 
 def forward_of(theta: float) -> np.ndarray:
@@ -87,11 +95,12 @@ def read_state(env, env_id: int = 0) -> SweepState:
 
 @dataclass
 class ArmPoses:
-    """穂の高さごとのアームの関節位置 (calibrate_arm で求める)"""
+    """穂の高さごとのアームの関節位置 (calibrate_arm で求める) と、移動の姿勢"""
 
     heights: tuple[float, ...]
     q: np.ndarray  # [len(heights), 5] (rad)
     tip: np.ndarray  # [2] 押し当てた姿勢の穂先の位置 (台車の座標系。x が右、y が前)
+    travel: np.ndarray  # [5] 移動の姿勢 (rad)。穂が front カメラの視野の上の端にあり、床を隠さない
 
     def at(self, s: float) -> np.ndarray:
         """s=0 (押し当てた姿勢) から s=1 (上げた姿勢) までの関節位置。高さの順に区分線形に補間する"""
@@ -158,7 +167,8 @@ def calibrate_arm(env, forward: float = BRUSH_FORWARD, alpha: float = BRUSH_ALPH
             raise RuntimeError(f"brush pose not reachable: forward={forward} height={h} alpha={alpha:.2f} (residual {err:.1e})")
         solutions.append(q.clone())
     tip, _, _ = fk(solutions[0])
-    return ArmPoses(tuple(heights), torch.stack(solutions).cpu().numpy().astype(np.float64), tip[:2].cpu().numpy().astype(np.float64))
+    to_np = lambda x: x.cpu().numpy().astype(np.float64)
+    return ArmPoses(tuple(heights), to_np(torch.stack(solutions)), to_np(tip[:2]), to_np(robot.data.default_joint_pos[0, arm]))
 
 
 @dataclass
@@ -278,7 +288,7 @@ def plan_route(start: np.ndarray, goal: np.ndarray, obstacles: np.ndarray, clear
 class SweepPlanner:
     """掃きを繰り返す状態機械。act を 1 フレーム (dt 秒) ごとに呼ぶ
 
-    状態: init (アームを上げた姿勢へ) -> plan -> travel (台車を開始位置へ) -> lower -> push -> raise -> plan ...
+    状態: init (アームを移動の姿勢へ) -> plan -> travel (台車を開始位置へ) -> lower -> push -> raise -> plan ...
     押し終わっていないゴミがなくなったら idle (止まって、ときどき計画し直す)。
     """
 
@@ -294,6 +304,7 @@ class SweepPlanner:
         self.route: list[np.ndarray] = []
         self.goal_theta = 0.0
         self.arm_from: np.ndarray | None = None
+        self.arm_t = 0.0  # アームの経路 (_arm_at) の上の位置 (s)。0 が移動の姿勢
         self.vel = np.zeros(3)  # 前のフレームの台車の速度の指令 (ワールド座標系の x, y と theta)
 
     def _tip(self, state: SweepState) -> np.ndarray:
@@ -328,6 +339,23 @@ class SweepPlanner:
         cmd = np.array([*(err * 3.0), err_theta * 3.0])
         return self._limit(cmd, min(speed, stop_speed + 0.02)), dist, abs(err_theta)
 
+    def _travel_theta(self, state: SweepState) -> float:
+        """移動の間の台車の向き。開始位置から遠いうちは、押し終わっていないゴミの重心の方を向く"""
+        pending = ~in_target(state.debris, state.target, self.params.done_margin)
+        if not pending.any():
+            return self.goal_theta
+        look = heading_of(state.debris[pending].mean(axis=0) - state.base)
+        dist = np.linalg.norm(self.route[-1] - state.base)
+        w = min(max((dist - LOOK_NEAR) / (LOOK_FAR - LOOK_NEAR), 0.0), 1.0)
+        return self.goal_theta + w * wrap(look - self.goal_theta)
+
+    def _arm_at(self, t: float) -> np.ndarray:
+        """移動の姿勢 (t=0) から、穂を上げた姿勢 (t=ARM_TRAVEL_TIME) を経て、押し当てた姿勢
+        (t=ARM_TRAVEL_TIME + ARM_MOVE_TIME) までの関節位置"""
+        if t < ARM_TRAVEL_TIME:
+            return self.poses.travel + (self.poses.at(1.0) - self.poses.travel) * (t / ARM_TRAVEL_TIME)
+        return self.poses.at(1.0 - (t - ARM_TRAVEL_TIME) / ARM_MOVE_TIME)
+
     def _start_phase(self, phase: str) -> None:
         self.phase, self.timer = phase, 0.0
 
@@ -337,11 +365,16 @@ class SweepPlanner:
         vel = np.zeros(3)
         if self.arm_from is None:
             self.arm_from = state.arm.copy()
-        arm = self.poses.at(1.0)
+        if self.phase == "travel" and len(self.route) == 1 and np.linalg.norm(self.route[0] - state.base) < LOOK_NEAR:
+            # 開始位置の近く (掃く向きを向いた後) では、穂を上げた姿勢へ移しておく
+            self.arm_t = min(self.arm_t + self.dt, ARM_TRAVEL_TIME)
+        elif self.phase not in ("init", "lower", "push", "raise"):
+            self.arm_t = max(self.arm_t - self.dt, 0.0)
+        arm = self._arm_at(self.arm_t)
 
         if self.phase == "init":
             a = min(self.timer / ARM_INIT_TIME, 1.0)
-            arm = self.arm_from + (self.poses.at(1.0) - self.arm_from) * a
+            arm = self.arm_from + (self.poses.travel - self.arm_from) * a
             vel = self._limit(np.zeros(3), 0.0)
             if a >= 1.0:
                 self._start_phase("plan")
@@ -360,7 +393,7 @@ class SweepPlanner:
                     self._start_phase("travel")
         elif self.phase == "travel":
             final = len(self.route) == 1
-            vel, dist, err_theta = self._goto(state, self.route[0], self.goal_theta, TRAVEL_SPEED)
+            vel, dist, err_theta = self._goto(state, self.route[0], self._travel_theta(state), TRAVEL_SPEED)
             if not final and dist < 0.05:
                 self.route.pop(0)
             elif final and dist < 0.01 and err_theta < 0.02 and np.abs(self.vel).max() < 0.05:
@@ -368,14 +401,14 @@ class SweepPlanner:
             elif self.timer > 15.0:  # 着かない (押されたゴミが邪魔をしているなど)。計画し直す
                 self._start_phase("plan")
         elif self.phase == "lower":
-            a = min(self.timer / ARM_MOVE_TIME, 1.0)
-            arm = self.poses.at(1.0 - a)
+            self.arm_t = min(self.arm_t + self.dt, ARM_TRAVEL_TIME + ARM_MOVE_TIME)
+            arm = self._arm_at(self.arm_t)
             vel, _, _ = self._goto(state, self.route[-1], self.goal_theta, 0.05)
-            if a >= 1.0:
+            if self.arm_t >= ARM_TRAVEL_TIME + ARM_MOVE_TIME:
                 self._start_phase("push")
         elif self.phase == "push":
             p = self.current
-            arm = self.poses.at(0.0)
+            arm = self._arm_at(self.arm_t)
             tip = self._tip(state) - state.target
             along, lat = tip @ p.direction, tip @ p.normal
             remaining = p.end - along
@@ -386,10 +419,10 @@ class SweepPlanner:
                 self.passes += 1
                 self._start_phase("raise")
         elif self.phase == "raise":
-            a = min(self.timer / ARM_MOVE_TIME, 1.0)
-            arm = self.poses.at(a)
+            self.arm_t = max(self.arm_t - self.dt, ARM_TRAVEL_TIME)
+            arm = self._arm_at(self.arm_t)
             vel = self._limit(np.zeros(3), 0.0)
-            if a >= 1.0:
+            if self.arm_t <= ARM_TRAVEL_TIME:
                 self._start_phase("plan")
 
         return np.concatenate([arm, [contract.GRIPPER_HOLD_RAD], vel])

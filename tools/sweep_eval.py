@@ -8,7 +8,8 @@
     remote:  推論サーバ (tools/policy_server.py。make policy-up) につなぐ。観測 (カメラと関節の状態) だけを送り、
              action の系列の先頭 action_horizon 個を受け取る (leisaac_ext.remote)
 成功は終了条件 success (10 個中 8 個以上が目標領域に入る)。時間切れ (25 秒) は失敗。
-結果は out_dir の rounds.jsonl (ラウンドごと) と summary.json に残す。
+結果は out_dir の rounds.jsonl (ラウンドごと) と summary.json に残す。view_fraction は、押し終わっていないゴミが
+front カメラの水平の画角に入っていたフレームの割合 (ゴミを見失わずに動けているかの目安)。
 --videos を付けると、ラウンドごとの動画 (videos/round_<番号>_<success|failure>.mp4。front、wrist、上から見た図を
 並べた 30fps の実時間) と、全ラウンドの終わりの図を並べた overview.png も残す (leisaac_ext.sweep_video)。
 --record を付けると、成功したエピソードだけを HDF5 に記録する (isaaclab の RecorderManager。上流の teleop と同じ形式)。
@@ -127,6 +128,18 @@ class ExecutedActionsRecorder(RecorderTerm):
 
 
 _BASE_IDX = [contract.SIM_JOINT_NAMES.index(j) for j in ("base_x", "base_y", "base_theta")]
+
+
+def pending_in_view(state: sweep_planner.SweepState) -> bool | None:
+    """押し終わっていない (目標領域の外の) ゴミのどれかが、front カメラの水平の画角に入っているか (なければ None)。
+    上下の画角と、穂に隠れるかどうかは見ない"""
+    pending = ~sweep_planner.in_target(state.debris, state.target)
+    if not pending.any():
+        return None
+    cam_x, cam_y = sweep_floor.FRONT_CAMERA_XY
+    camera = state.base + cam_x * sweep_planner.right_of(state.theta) + cam_y * sweep_planner.forward_of(state.theta)
+    bearing = [sweep_planner.wrap(sweep_planner.heading_of(d - camera) - state.theta) for d in state.debris[pending]]
+    return min(abs(b) for b in bearing) < sweep_floor.FRONT_HALF_FOV
 seed = args.seed if args.seed is not None else int(time.time())
 if args.dagger:
     assert args.policy == "remote" and args.record, "--dagger は --policy remote と --record と一緒に使う"
@@ -198,6 +211,8 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         # 台車の中心から最も近いゴミまでの距離の、ラウンド中の最小値。台車の外形の半径
         # (sweep_planner.BASE_RADIUS) より小さければ、ゴミに当たったか、台車の下にくぐらせている
         base_min_dist = math.inf
+        # 押し終わっていないゴミが front カメラの画角に入っていたフレームの数と、押し終わっていないゴミがあったフレームの数
+        view_frames, pending_frames = 0, 0
         if args.videos:
             video = sweep_video.VideoWriter(f"{out_dir}/videos/round_{r:03d}.mp4")
             debris_start, base_path = sweep_planner.read_state(env).debris, []
@@ -221,6 +236,9 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     count = int(inside.sum())
                     state = sweep_planner.read_state(env)
                     base_min_dist = min(base_min_dist, float(np.linalg.norm(state.debris - state.base, axis=-1).min()))
+                    if steps % contract.SIM_STEPS_PER_FRAME == 0 and (in_view := pending_in_view(state)) is not None:
+                        view_frames += in_view
+                        pending_frames += 1
                     if args.videos and steps % contract.SIM_STEPS_PER_FRAME == 0:
                         # 観測 (カメラ) は、この step を実行する前の状態のもの。図も同じ時点の真値で描く
                         base_path.append(state.base)
@@ -242,7 +260,8 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
             # 最後に描いたフレームの状態に、ラウンドの結果を書き添える (自動リセットの後は、終わりの状態を読めない)
             maps.append(sweep_video.draw_map(*last, f"#{r} {'S' if success else 'F'} {steps * env.step_dt:.1f}s in={count}"))
         result = {"round": r, "success": success, "in_target": count, "sim_time": round(steps * env.step_dt, 2),
-                  "base_min_dist": round(base_min_dist, 3), "wall_time": round(time.time() - t0, 1), **policy.info()}
+                  "base_min_dist": round(base_min_dist, 3), "view_fraction": round(view_frames / max(pending_frames, 1), 3),
+                  "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
         if args.dagger:
             # すべてのラウンドを記録する (HDF5 の demo_<ラウンドの番号>)
@@ -259,7 +278,7 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         log.write(json.dumps(result) + "\n")
         log.flush()
         print(f"round {r}: {'success' if success else 'failure'} in_target={count} sim_time={result['sim_time']}s "
-              f"base_min_dist={result['base_min_dist']:.3f}m " + " ".join(f"{k}={v}" for k, v in policy.info().items()) + f" ({n_ok}/{len(results)})", flush=True)
+              f"base_min_dist={result['base_min_dist']:.3f}m view={result['view_fraction']:.2f} " + " ".join(f"{k}={v}" for k, v in policy.info().items()) + f" ({n_ok}/{len(results)})", flush=True)
 
 n, n_ok = len(results), sum(x["success"] for x in results)
 # 成功率の 95% 信頼区間 (Wilson)
@@ -272,6 +291,8 @@ summary = {"task": args.task, "policy": args.policy, "seed": seed, "rounds": n, 
            "mean_sim_time_success": round(float(np.mean([x["sim_time"] for x in results if x["success"]])), 2) if n_ok else None,
            # 台車がゴミに当たった (台車の中心から最も近いゴミまでが、外形の半径未満の) ラウンドの数
            "base_contact_rounds": sum(x["base_min_dist"] < sweep_planner.BASE_RADIUS for x in results),
+           # 押し終わっていないゴミが front カメラの画角に入っていたフレームの割合 (ラウンドの平均)
+           "mean_view_fraction": round(float(np.mean([x["view_fraction"] for x in results])), 3) if n else None,
            "wall_time": round(time.time() - start, 1), "device": args.device}
 if args.policy == "remote":
     # ping は、ここまでの推論サーバの VRAM のピークも返す
