@@ -154,6 +154,39 @@ sim、変換、学習、推論のすべてが、このファイルの定義に�
 - 成功は終了条件 `success`（8 個以上）。25 秒で時間切れ。
 - ラウンドごとの指標: 成功、目標領域に入った個数、かかった時間、`base_min_dist`（台車の中心から最も近いゴミまでの距離の最小値。0.165m 未満なら、ゴミに当たったか、台車の下にくぐらせた）、`view_fraction`（押し終わっていないゴミのどれかが front カメラの水平の画角 ±26.8° に入っていたフレームの割合。上下の画角と、穂に隠れるかは見ない）。
 
+### 状態の記録（`tools/leisaac_ext/sweep_log.py`、2026-11-01 から）
+
+評価（datagen、dagger も同じ）は、動画とは別に、後から状態を調べたり再生したりできる記録を常に残す。30 ラウンドで 2MB 弱（1 ラウンド約 55KB）。
+
+| ファイル | 中身 |
+|---|---|
+| `run.json` | 実行全体の構成。バージョン（isaacsim、isaaclab、leisaac とその commit、このリポジトリの commit `source_rev`（`-dirty` は未コミットの変更あり）、イメージの中の tools のハッシュ）、sim の刻み、ロボット（関節の名前、既定の姿勢、ゲイン、可動範囲）、カメラ（取り付けの親リンク、位置と向き、焦点距離、画角、解像度、内部パラメータ）、ゴミの大きさと質量、引数、シード、ポリシー（推論サーバのチェックポイント、計画器のアームの姿勢と掃きのパラメータ） |
+| `env_cfg.yaml` | env の設定のすべて（isaaclab の `dump_yaml`）。ランダム化の範囲、配置の範囲、アクチュエータなど |
+| `states/round_<番号>.npz` | ラウンドごとの状態（下の表） |
+
+npz のキー（位置は env の原点からの m、姿勢は四元数 (w, x, y, z)）:
+
+| キー | 形 | 中身 |
+|---|---|---|
+| `setup/init/<種類>/<名前>/<項目>` | | ラウンドの初めの状態（`scene.get_state(is_relative=True)`。ロボットの姿勢と関節、ゴミと目標領域の姿勢）。`env.reset_to` にそのまま渡せる |
+| `setup/light/intensity`、`setup/light/color` | ()、(3) | 照明（ランダム化の後の値） |
+| `setup/debris/color`、`mass`、`material` | (10, 3)、(10, 1)、(10, 1, 3) | ゴミの色、質量、摩擦（静止、動、反発） |
+| `setup/camera/<名前>/local_pos`、`local_quat` | (3)、(4) | カメラの取り付けの姿勢（親リンクから。opengl の向き。ランダム化の後の値） |
+| `frame/step`、`frame/time` | (T) | 30fps のフレーム。観測を取った時点 |
+| `frame/base_pos`、`base_quat` | (T, 3)、(T, 4) | 台車 |
+| `frame/joint_pos`、`joint_vel` | (T, 9) | 関節（並びは `run.json` の `robot.joint_names`） |
+| `frame/debris_pos`、`debris_quat` | (T, 10, 3)、(T, 10, 4) | ゴミ |
+| `frame/camera/<名前>/pos`、`quat` | (T, 3)、(T, 4) | カメラの姿勢（opengl の向き。-z が視線） |
+| `frame/action` | (T, 9) | そのフレームの後に実行した sim の action（並びは `run.json` の `contract.sim_action`）。2 step 続ける |
+| `frame/expert_action` | (T, 9) | dagger のときだけ。計画器の正解 |
+| `frame/inside`、`in_view`、`chunk_start` | (T, 10)、(T)、(T) | 目標領域に入っているか、押し終わっていないゴミが front の画角に入っているか（1/0、ないとき -1）、推論の区切りか |
+| `meta/round`、`success`、`in_target`、`steps`、`seed` | () | ラウンドの結果 |
+
+- 読むときは `sweep_log.load_round(path)`（numpy だけで読める。isaaclab は要らない）。`np.load` でもよい。
+- 最後のフレームの action の後の状態（ラウンドの終わり）は、自動リセットで消えるので残らない。
+- 再生: `make sweep-replay EVAL_RUN=<日時> [EPISODES="0 3"] [EVAL_VIDEOS=1]`。ラウンドの初めの状態と、見た目と物理のランダム化の値を戻し、記録した action を流して、ゴミの位置をフレームごとに記録と比べる。`EVAL_VIDEOS=1` なら、評価のときと同じ見た目の動画を `data/sweep/eval/<日時>/replay/videos/` に作る。評価のときに動画を残さなくても、後から作れる。
+- 確認（2026-11-01、計画器 2 ラウンド）: 最後のフレームの個数は 2/2 一致。ゴミの位置のずれは、最大 0.00cm と 0.12〜0.32cm（再生するたびに少し変わる。物理の計算は完全には決定的でない）。再生の動画は、2 フレーム目から評価の動画と同じ見た目になる。最初のフレームには、前の場面を引きずった像が残ることがある（RTX の描画）。
+
 ### 結果（2026-10-30、CPU 物理）
 
 | 実行 | 成功 | ゴミに当たったラウンド | 成功までの時間 |

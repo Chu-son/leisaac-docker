@@ -39,7 +39,10 @@ TRAIN_CHECKPOINT  ?= last
 # sweep-eval の乱数のシード。空なら現在時刻。同じ値にすると、ラウンドごとの配置がそろう
 EVAL_SEED         ?=
 # 1 なら sweep-eval がラウンドごとの動画 (videos/round_*.mp4) と overview.png を結果に残す
+# (状態の記録 states/round_*.npz は常に残る。動画は後から sweep-replay EVAL_RUN=... VIDEOS=1 でも作れる)
 EVAL_VIDEOS       ?= 0
+# sweep-replay で再生する評価 (data/sweep/eval/<EVAL_RUN>/ の状態の記録)。空なら DATASET の datagen の記録を再生する
+EVAL_RUN          ?=
 
 # --- 学習 (train)。出力先は data/train/$(TRAIN_NAME)/。TRAIN_STEPS / TRAIN_BATCH が空なら sweep_train.py の既定
 TRAIN_POLICY ?= act
@@ -72,7 +75,8 @@ COMPOSE        := docker compose -f compose.yaml $(if $(filter $(LEADER_DEVICES)
 # sim はコマンドごとに使い捨てのコンテナで実行する (コンテナ内に状態を残さない)。
 # 端末から実行したときだけ TTY を割り当てる。スクリプトは自前のタスクを登録するラッパーを通して実行する
 TTY_FLAG     := $(if $(shell test -t 0 && echo y),,-T)
-SIM_RUN       = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) sim python /opt/tools/leisaac_run.py
+# SOURCE_REV は、このリポジトリの commit (未コミットの変更があれば -dirty)。評価の記録 (run.json) に残す
+SIM_RUN       = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) -e SOURCE_REV=$$(git describe --always --dirty 2>/dev/null) sim python /opt/tools/leisaac_run.py
 # train (LeRobot。記録の変換と学習) も、コマンドごとに使い捨てのコンテナで実行する
 TRAIN_RUN     = $(COMPOSE) run --rm $(TTY_FLAG) --name $(1) train python
 SIM_ARGS      = --device=$(SIM_DEVICE) \
@@ -117,7 +121,7 @@ help:
 	@echo "  sweep-eval       Sweep タスクを EVAL_POLICY=$(EVAL_POLICY) (planner|remote) で EVAL_ROUNDS 回解き、成功率を測る (-> data/sweep/eval/<日時>/)"
 	@echo "  datagen          Sweep タスクの自動生成。計画器が成功したエピソードを NUM=$(NUM) 個記録する (-> $(DATASET_PATH))"
 	@echo "  dagger           学習したポリシー (TRAIN_NAME) で NUM 回動かし、計画器の action を正解として記録する (DAgger。-> $(DATASET_PATH))"
-	@echo "  sweep-replay     datagen の記録を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
+	@echo "  sweep-replay     datagen の記録 (EVAL_RUN=<日時> なら評価の状態の記録) を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
 	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
 	@echo "  convert          datagen の記録 (CONVERT_FROM=$(CONVERT_FROM)) を LeRobot 形式に変換し、HDF5 と照合する (train イメージ。-> data/lerobot/$(DATASET)/)"
 	@echo "  train            data/lerobot/$(DATASET) で TRAIN_POLICY=$(TRAIN_POLICY) (act|smolvla|groot) を学習する (-> data/train/$(TRAIN_NAME)/)"
@@ -145,7 +149,7 @@ config:
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
-	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
+	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_RUN=$(or $(EVAL_RUN),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
 	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
@@ -211,9 +215,16 @@ dagger: policy-up
 
 # datagen の記録を action で再生し、成功と最終位置を記録と比べる (結果は data/sweep/replay/<日時>/)
 sweep-replay:
+ifeq ($(EVAL_RUN),)
 	$(check_sim_record)
 	$(call SIM_RUN,leisaac-sweep-replay) /opt/tools/sweep_replay.py --dataset_file=$(DATASET_FILE) \
 		$(if $(EPISODES),--episodes $(EPISODES)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+else
+	@test -d data/sweep/eval/$(EVAL_RUN)/states || { echo "[エラー] data/sweep/eval/$(EVAL_RUN)/states がありません"; exit 1; }
+	$(call SIM_RUN,leisaac-sweep-replay) /opt/tools/sweep_replay.py --eval_dir=/workspace/data/sweep/eval/$(EVAL_RUN) \
+		--out_dir=/workspace/data/sweep/eval/$(EVAL_RUN)/replay $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
+		$(if $(EPISODES),--episodes $(EPISODES)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+endif
 
 # datagen の記録を、Kit を起動せずに確かめる。動画は EPISODES のもの (空ならすべて)
 sweep-inspect:

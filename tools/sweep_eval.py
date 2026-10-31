@@ -10,6 +10,8 @@
 成功は終了条件 success (10 個中 8 個以上が目標領域に入る)。時間切れ (25 秒) は失敗。
 結果は out_dir の rounds.jsonl (ラウンドごと) と summary.json に残す。view_fraction は、押し終わっていないゴミが
 front カメラの水平の画角に入っていたフレームの割合 (ゴミを見失わずに動けているかの目安)。
+状態の記録 (leisaac_ext.sweep_log) も常に残す: run.json (構成)、env_cfg.yaml、states/round_<番号>.npz (ラウンドの初めの
+状態とランダム化の値、30fps のフレームごとの状態と action)。sweep_replay.py --eval_dir で再生でき、動画も作り直せる。
 --videos を付けると、ラウンドごとの動画 (videos/round_<番号>_<success|failure>.mp4。front、wrist、上から見た図を
 並べた 30fps の実時間) と、全ラウンドの終わりの図を並べた overview.png も残す (leisaac_ext.sweep_video)。
 --record を付けると、成功したエピソードだけを HDF5 に記録する (isaaclab の RecorderManager。上流の teleop と同じ形式)。
@@ -60,7 +62,7 @@ from isaaclab.managers import DatasetExportMode, RecorderTerm
 from isaaclab_tasks.utils import parse_env_cfg
 
 import leisaac  # noqa: F401
-from leisaac_ext import contract, remote, sweep_floor, sweep_mdp, sweep_planner, sweep_video
+from leisaac_ext import contract, remote, sweep_floor, sweep_log, sweep_mdp, sweep_planner, sweep_video
 
 
 class PlannerPolicy:
@@ -182,6 +184,24 @@ else:
     policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon)
     print(f"policy=remote seed={seed} action_horizon={args.action_horizon} server={policy.server}", flush=True)
 expert = PlannerPolicy(env) if args.dagger else None
+policy_info = {"type": args.policy}
+if args.policy == "remote":
+    policy_info.update(server=policy.server, action_horizon=args.action_horizon)
+for name, p in (("planner", policy if args.policy == "planner" else None), ("expert", expert)):
+    if p is not None:
+        policy_info[name] = {"arm_heights": list(p.poses.heights), "arm_q": p.poses.q.round(6).tolist(),
+                             "brush_tip": p.poses.tip.round(6).tolist(), "arm_travel": p.poses.travel.round(6).tolist(),
+                             "params": vars(p.planner.params)}
+sweep_log.write_run(out_dir, env, {"task": args.task, "seed": seed, "args": vars(args), "policy": policy_info,
+                                   "contract": {"fps": contract.FPS, "sim_steps_per_frame": contract.SIM_STEPS_PER_FRAME,
+                                                "sim_joint_names": list(contract.SIM_JOINT_NAMES),
+                                                # sim の action (frame/action) の並び (lekiwi-leader の構成)
+                                                "sim_action": [*contract.ARM_JOINTS, "base_vx_world", "base_vy_world", "base_vtheta"],
+                                                "action_names": list(contract.ACTION_NAMES), "cameras": list(contract.CAMERAS),
+                                                "instruction": contract.INSTRUCTION},
+                                   "task_constants": {"target_half": sweep_mdp.TARGET_HALF, "success_count": sweep_mdp.SUCCESS_COUNT,
+                                                      "in_target_max_z": sweep_mdp.IN_TARGET_MAX_Z}})
+round_log = sweep_log.RoundLog(env)
 rng = np.random.default_rng(seed)
 # 2 ラウンド目からは、前のラウンドの終わりの自動リセットが返した観測から始める。env.reset() を重ねると、
 # 記録中のエピソード (初期状態だけ) が、前のラウンドの success の値 (リセットでは消えない) で書き出される
@@ -213,13 +233,14 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         base_min_dist = math.inf
         # 押し終わっていないゴミが front カメラの画角に入っていたフレームの数と、押し終わっていないゴミがあったフレームの数
         view_frames, pending_frames = 0, 0
+        round_log.begin()
         if args.videos:
             video = sweep_video.VideoWriter(f"{out_dir}/videos/round_{r:03d}.mp4")
             debris_start, base_path = sweep_planner.read_state(env).debris, []
         while not done:
             chunk = policy.act(obs["policy"])
             use_expert = expert is not None and rng.random() < args.dagger_beta
-            for a in chunk:
+            for k, a in enumerate(chunk):
                 joint_pos = obs["policy"]["joint_pos"][0].cpu().numpy().astype(np.float64)
                 sim_action = torch.tensor(contract.from_lerobot_action(a, joint_pos), device=env.device)[None]
                 if expert:
@@ -230,15 +251,21 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     env.expert_action = expert_action
                     if use_expert:
                         sim_action = expert_action
-                for _ in range(contract.SIM_STEPS_PER_FRAME):
+                for sub in range(contract.SIM_STEPS_PER_FRAME):
                     # step の後は自動でリセットされるので、終わる前の個数を残しておく
                     inside = sweep_mdp.debris_in_target(env)[0]
                     count = int(inside.sum())
                     state = sweep_planner.read_state(env)
                     base_min_dist = min(base_min_dist, float(np.linalg.norm(state.debris - state.base, axis=-1).min()))
-                    if steps % contract.SIM_STEPS_PER_FRAME == 0 and (in_view := pending_in_view(state)) is not None:
-                        view_frames += in_view
-                        pending_frames += 1
+                    if steps % contract.SIM_STEPS_PER_FRAME == 0:
+                        in_view = pending_in_view(state)
+                        if in_view is not None:
+                            view_frames += in_view
+                            pending_frames += 1
+                        extra = {"expert_action": env.expert_action[0]} if expert else {}
+                        # in_view: 押し終わっていないゴミが front の画角に入っているか (1/0。押し終わっていなければ -1)
+                        round_log.add(steps, sim_action[0], inside=inside, in_view=np.int8(-1 if in_view is None else in_view),
+                                      chunk_start=k == 0 and sub == 0, **extra)
                     if args.videos and steps % contract.SIM_STEPS_PER_FRAME == 0:
                         # 観測 (カメラ) は、この step を実行する前の状態のもの。図も同じ時点の真値で描く
                         base_path.append(state.base)
@@ -259,9 +286,11 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
             os.rename(video.path, f"{out_dir}/videos/round_{r:03d}_{'success' if success else 'failure'}.mp4")
             # 最後に描いたフレームの状態に、ラウンドの結果を書き添える (自動リセットの後は、終わりの状態を読めない)
             maps.append(sweep_video.draw_map(*last, f"#{r} {'S' if success else 'F'} {steps * env.step_dt:.1f}s in={count}"))
+        round_log.save(f"{out_dir}/states/round_{r:03d}.npz",
+                       {"round": r, "success": success, "in_target": count, "steps": steps, "seed": seed})
         result = {"round": r, "success": success, "in_target": count, "sim_time": round(steps * env.step_dt, 2),
                   "base_min_dist": round(base_min_dist, 3), "view_fraction": round(view_frames / max(pending_frames, 1), 3),
-                  "wall_time": round(time.time() - t0, 1), **policy.info()}
+                  "states": f"states/round_{r:03d}.npz", "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
         if args.dagger:
             # すべてのラウンドを記録する (HDF5 の demo_<ラウンドの番号>)
