@@ -62,6 +62,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `sweep-eval` | Sweep タスクを `EVAL_POLICY` で `EVAL_ROUNDS` 回解き、成功率を測る。`planner` は計画器（特権情報を使う）、`remote` は学習したポリシー（先に `policy-up` を実行する）。結果は `data/sweep/eval/<日時>/` に残す |
 | `datagen` | Sweep タスクの自動生成。計画器が成功したエピソードだけを `NUM` 個、`data/datasets/$(DATASET).hdf5` に記録する（例: `make datagen DATASET=sweep_floor NUM=50`） |
 | `dagger` | 学習したポリシー（`TRAIN_NAME`。推論サーバを起動する）で `NUM` ラウンド動かし、各フレームの計画器の action を正解として、すべてのラウンドを `data/datasets/$(DATASET).hdf5` に記録する（DAgger。docs/sweep.md） |
+| `sweep-camera-probe` | カメラの取り付けの候補を、計画器で動かした同じ場面で描き比べる（`data/sweep/camera_probe/`。docs/sweep.md の「カメラの見直し」） |
 | `sweep-replay` | `datagen` の記録を再生し、記録どおりに成功するかを確かめる。`EPISODES="0 3"` で選ぶ。`HEADLESS=0` で GUI に表示する。`EVAL_RUN=<日時>` なら評価の状態の記録（`data/sweep/eval/<日時>/states/`）を再生し、`EVAL_VIDEOS=1` で動画を作り直す |
 | `convert` | `datagen` の記録（`CONVERT_FROM`。既定は `DATASET`。複数ならつなぐ）を LeRobot 形式（lerobot 0.4.2、v3.0、30fps、動画は AV1）に変換し、`data/lerobot/$(DATASET)/` に出力する。読み直して、すべてのフレームを HDF5 と照合する（train イメージ） |
 | `train` | `data/lerobot/$(DATASET)/` で `TRAIN_POLICY`（`act` / `smolvla` / `groot`）を学習し、`data/train/$(TRAIN_NAME)/` に出力する。GR00T はローカルでは学習できない（Colab で行う） |

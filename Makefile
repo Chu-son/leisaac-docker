@@ -107,7 +107,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen dagger sweep-replay sweep-inspect convert train colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen dagger sweep-replay sweep-camera-probe sweep-inspect convert train colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -121,6 +121,7 @@ help:
 	@echo "  sweep-eval       Sweep タスクを EVAL_POLICY=$(EVAL_POLICY) (planner|remote) で EVAL_ROUNDS 回解き、成功率を測る (-> data/sweep/eval/<日時>/)"
 	@echo "  datagen          Sweep タスクの自動生成。計画器が成功したエピソードを NUM=$(NUM) 個記録する (-> $(DATASET_PATH))"
 	@echo "  dagger           学習したポリシー (TRAIN_NAME) で NUM 回動かし、計画器の action を正解として記録する (DAgger。-> $(DATASET_PATH))"
+	@echo "  sweep-camera-probe  カメラの取り付けの候補を、同じ場面で描き比べる (-> data/sweep/camera_probe/)"
 	@echo "  sweep-replay     datagen の記録 (EVAL_RUN=<日時> なら評価の状態の記録) を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
 	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
 	@echo "  convert          datagen の記録 (CONVERT_FROM=$(CONVERT_FROM)) を LeRobot 形式に変換し、HDF5 と照合する (train イメージ。-> data/lerobot/$(DATASET)/)"
@@ -162,7 +163,7 @@ down:
 # Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
 stop:
 	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval \
-		leisaac-datagen leisaac-dagger leisaac-sweep-replay leisaac-sweep-inspect leisaac-convert leisaac-train leisaac-train-check leisaac-shell >/dev/null 2>&1
+		leisaac-datagen leisaac-dagger leisaac-sweep-replay leisaac-sweep-camera-probe leisaac-sweep-inspect leisaac-convert leisaac-train leisaac-train-check leisaac-shell >/dev/null 2>&1
 
 shell-sim:
 	$(COMPOSE) run --rm $(TTY_FLAG) --name leisaac-shell sim bash
@@ -225,6 +226,10 @@ else
 		--out_dir=/workspace/data/sweep/eval/$(EVAL_RUN)/replay $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		$(if $(EPISODES),--episodes $(EPISODES)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 endif
+
+# カメラの取り付けの候補を同じ場面で描き比べる (-> data/sweep/camera_probe/)。候補は tools/sweep_camera_probe.py の中
+sweep-camera-probe:
+	$(call SIM_RUN,leisaac-sweep-camera-probe) /opt/tools/sweep_camera_probe.py $(SIM_ARGS) --enable_cameras --headless
 
 # datagen の記録を、Kit を起動せずに確かめる。動画は EPISODES のもの (空ならすべて)
 sweep-inspect:
