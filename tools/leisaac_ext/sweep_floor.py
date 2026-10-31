@@ -43,13 +43,39 @@ TARGET_RANGE = {"x": (-0.9, 0.9), "y": (0.5, 2.2)}
 TARGET_DISTANCE = (0.45, 0.7)  # ゴミのまとまりの中心から目標領域の中心まで
 
 CAMERA_WIDTH, CAMERA_HEIGHT = contract.IMAGE_SHAPE[1], contract.IMAGE_SHAPE[0]
-# front カメラの位置 (ロボットが原点にいるとき) と、水平の半画角 (rad)。上流の設定 (focal_length 36.5、
-# horizontal_aperture 36.83) では約 26.8° (上流のコメントの 75° ではない)
-_FRONT = LeKiwiTaskSceneCfg(num_envs=1, env_spacing=1.0).front
-FRONT_CAMERA_XY = _FRONT.offset.pos[:2]
-FRONT_HALF_FOV = math.atan(_FRONT.spawn.horizontal_aperture / 2 / _FRONT.spawn.focal_length)
-# 配置で使う方位の上限。カメラの向きのランダム化 (±0.03rad) と余裕の分だけ、半画角より狭くする
-LAYOUT_MAX_BEARING = FRONT_HALF_FOV - 0.05
+
+
+def _rot_x(deg: float) -> tuple[float, float, float, float]:
+    """x 軸まわりの回転の四元数 (w, x, y, z)"""
+    a = math.radians(deg) / 2
+    return (math.cos(a), math.sin(a), 0.0, 0.0)
+
+
+def _quat_mul(q1, q2) -> tuple[float, float, float, float]:
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return (w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2, w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2)
+
+
+# カメラの取り付け (2026-11-01 に見直し。docs/sweep.md の「カメラの見直し」。実機はこれに合わせて付け直す)。
+# 上流の front は台車の前の床から約 6cm で水平より 10° 上を向き、wrist は箒の柄しか写らなかった。
+# front: 台車 (base) の前 0.13m、上 0.20m (床から約 0.235m) に置き、水平より 30° 下を向ける (opengl の向きで x 軸まわり 60°)
+# wrist: 上流の向きから、画像の横軸まわりに 45° 回し、穂先とその前の床を写す
+# どちらも焦点距離 24mm (撮像面の幅 36.83mm で、水平の画角は約 75°)
+_UPSTREAM = LeKiwiTaskSceneCfg(num_envs=1, env_spacing=1.0)
+FRONT_POS = (0.0, 0.13, 0.20)
+FRONT_PITCH_DEG = -30.0
+WRIST_TILT_DEG = 45.0
+FOCAL_LENGTH = 24.0
+FRONT_ROT = _rot_x(90.0 + FRONT_PITCH_DEG)
+WRIST_ROT = _quat_mul(_UPSTREAM.wrist.offset.rot, _rot_x(WRIST_TILT_DEG))
+# front カメラの位置 (ロボットが原点にいるとき) と、水平の半画角 (rad)
+FRONT_CAMERA_XY = FRONT_POS[:2]
+FRONT_HALF_FOV = math.atan(_UPSTREAM.front.spawn.horizontal_aperture / 2 / FOCAL_LENGTH)
+# 配置で使う方位の上限 (rad)。見直し前の front の半画角 (約 26.8°) から、カメラの向きのランダム化 (±0.03rad) と余裕の分を
+# 引いた値のまま変えない (配置の分布をカメラの見直しの前とそろえ、同じシードで同じ配置にする)
+LAYOUT_MAX_BEARING = math.atan(_UPSTREAM.front.spawn.horizontal_aperture / 2 / _UPSTREAM.front.spawn.focal_length) - 0.05
 
 
 def _debris_cfg(i: int) -> RigidObjectCfg:
@@ -107,6 +133,9 @@ class SweepFloorSceneCfg(LeKiwiTaskSceneCfg):
         self.light.spawn = self.light.spawn.replace(intensity=LIGHT_INTENSITY, color=LIGHT_COLOR)
         for camera in (self.front, self.wrist):
             camera.width, camera.height = CAMERA_WIDTH, CAMERA_HEIGHT
+            camera.spawn = camera.spawn.replace(focal_length=FOCAL_LENGTH)
+        self.front.offset = self.front.offset.replace(pos=FRONT_POS, rot=FRONT_ROT)
+        self.wrist.offset = self.wrist.offset.replace(rot=WRIST_ROT)
 
 
 @configclass
