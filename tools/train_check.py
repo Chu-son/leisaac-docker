@@ -3,7 +3,8 @@
     python /opt/tools/train_check.py
 - contract のキー名とカメラが、lerobot 0.4.2 の実機の LeKiwi (LeKiwiClient) と一致すること
 - 学習するポリシー (ACT、SmolVLA、GR00T) を import でき、flash-attn (GR00T が使う) がこの GPU で動くこと
-- 合成した小さな HDF5 (datagen と同じ構成) を sweep_convert.py で変換し、照合が通ること (SWEEP CONVERT PASS)
+- 合成した小さな HDF5 (datagen と同じ構成) と、失敗したラウンドを含む DAgger の HDF5 (executed_actions がある) を、
+  sweep_convert.py でつないで変換し、照合が通ること (SWEEP CONVERT PASS)
 - 変換したデータで、sweep_train.py が ACT を数 step 学習し、チェックポイントを残すこと (SWEEP TRAIN OK)
 - そのチェックポイントを policy_server.py が読み、観測を送ると action の系列を返すこと (POLICY SERVER OK)
 """
@@ -47,27 +48,35 @@ def synthetic_images(steps: int, seed: int) -> np.ndarray:
     return images
 
 
-rng = np.random.default_rng(0)
-with tempfile.TemporaryDirectory() as tmp:
-    with h5py.File(f"{tmp}/synthetic.hdf5", "w") as f:
+def write_synthetic(path: str, lengths: tuple[int, ...], dagger: bool, seed: int) -> None:
+    """datagen と同じ構成の HDF5。dagger なら、失敗したエピソードで、executed_actions もある (sweep_eval.py --dagger)"""
+    with h5py.File(path, "w") as f:
         data = f.create_group("data")
-        for i, steps in enumerate((60, 41)):
+        for i, steps in enumerate(lengths):
             g = data.create_group(f"demo_{i}")
-            g.attrs["success"] = True
+            g.attrs["success"] = not dagger
             g.attrs["num_samples"] = steps
             g["actions"] = rng.uniform(-1, 1, (steps, 9)).astype(np.float32)
+            if dagger:
+                g["executed_actions"] = rng.uniform(-1, 1, (steps, 9)).astype(np.float32)
             g["obs/joint_pos"] = rng.uniform(-1, 1, (steps, 9)).astype(np.float32)
             g["obs/joint_vel"] = rng.uniform(-1, 1, (steps, 9)).astype(np.float32)
             for k, cam in enumerate(contract.CAMERAS):
-                g[f"obs/{cam}"] = synthetic_images(steps, 2 * i + k)
-        data.attrs["total"] = 101
+                g[f"obs/{cam}"] = synthetic_images(steps, seed + 2 * i + k)
+        data.attrs["total"] = sum(lengths)
+
+
+rng = np.random.default_rng(0)
+with tempfile.TemporaryDirectory() as tmp:
+    write_synthetic(f"{tmp}/synthetic.hdf5", (60, 41), dagger=False, seed=0)
+    write_synthetic(f"{tmp}/dagger.hdf5", (30,), dagger=True, seed=4)
     out = subprocess.run([sys.executable, "/opt/tools/sweep_convert.py", "--dataset_file", f"{tmp}/synthetic.hdf5",
-                          "--root", f"{tmp}/lerobot"], capture_output=True, text=True)
+                          f"{tmp}/dagger.hdf5", "--root", f"{tmp}/lerobot"], capture_output=True, text=True)
     lines = [line for line in out.stdout.splitlines() if line.startswith(("SWEEP CONVERT", "[NG]", "verify"))]
     print("\n".join(lines))
     if out.returncode != 0:
         print(out.stderr[-3000:])
-    assert out.returncode == 0 and any(line.startswith("SWEEP CONVERT PASS") for line in lines), "変換器の確認に失敗"
+    assert out.returncode == 0 and any(line.startswith("SWEEP CONVERT PASS 3 episodes") for line in lines), "変換器の確認に失敗"
 
     out = subprocess.run([sys.executable, "/opt/tools/sweep_train.py", "--policy", "act", "--dataset_root", f"{tmp}/lerobot",
                           "--output_dir", f"{tmp}/train", "--steps", "4", "--batch_size", "2", "--num_workers", "0"],

@@ -84,7 +84,8 @@ with h5py.File(args.dataset_file, "r") as f:
         for cam in contract.CAMERAS:
             if group[f"obs/{cam}"].shape != (steps, *contract.IMAGE_SHAPE):
                 problems.append(f"episode {i}: obs/{cam} の形が {group[f'obs/{cam}'].shape}")
-        if not group.attrs.get("success") or count[-1] < SUCCESS_COUNT:
+        # DAgger の記録 (executed_actions がある) は、失敗したラウンドも含む
+        if "executed_actions" not in group and (not group.attrs.get("success") or count[-1] < SUCCESS_COUNT):
             problems.append(f"episode {i}: 成功していない (success={group.attrs.get('success')}、最後の個数 {count[-1]})")
         maps.append(map_at(seq, steps - 1, f"#{i} {steps / 60:.1f}s in={count[-1]}"))
         if i in videos:

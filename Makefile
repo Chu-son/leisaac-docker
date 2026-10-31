@@ -11,9 +11,13 @@ DATASET     ?= demo
 RESUME      ?= 0
 FORCE       ?= 0
 LEADER_PORT ?= /dev/ttyACM0
-# Sweep タスクの自動生成で集めるエピソードの数と、sweep-replay / sweep-inspect で選ぶエピソードの番号 (空ならすべて)
+# Sweep タスクの自動生成で集めるエピソードの数 (dagger ではラウンドの数) と、sweep-replay / sweep-inspect で選ぶエピソードの番号 (空ならすべて)
 NUM         ?= 50
 EPISODES    ?=
+# convert で変換する記録 (data/datasets/<名前>.hdf5。空白区切りで複数なら順につなぐ)。既定は DATASET
+CONVERT_FROM ?= $(DATASET)
+# dagger で、chunk ごとに計画器の action で動かす確率 (0 なら学習したポリシーだけで動かす)
+DAGGER_BETA ?= 0
 
 # --- sim の設定 (すべてのタスクで共通)。既定は VRAM 12GB 向けで、物理演算を CPU にし、
 # テクスチャストリーミングの予算 (VRAM に対する割合) を絞る。VRAM に余裕があれば .env で
@@ -99,7 +103,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen sweep-replay sweep-inspect convert train colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen dagger sweep-replay sweep-inspect convert train colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -112,9 +116,10 @@ help:
 	@echo "  sweep-check      Sweep タスクの確認 (contract と上流の一致、配置、成功判定。画像は data/sweep/check/)"
 	@echo "  sweep-eval       Sweep タスクを EVAL_POLICY=$(EVAL_POLICY) (planner|remote) で EVAL_ROUNDS 回解き、成功率を測る (-> data/sweep/eval/<日時>/)"
 	@echo "  datagen          Sweep タスクの自動生成。計画器が成功したエピソードを NUM=$(NUM) 個記録する (-> $(DATASET_PATH))"
+	@echo "  dagger           学習したポリシー (TRAIN_NAME) で NUM 回動かし、計画器の action を正解として記録する (DAgger。-> $(DATASET_PATH))"
 	@echo "  sweep-replay     datagen の記録を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
 	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
-	@echo "  convert          datagen の記録を LeRobot 形式に変換し、HDF5 と照合する (train イメージ。-> data/lerobot/$(DATASET)/)"
+	@echo "  convert          datagen の記録 (CONVERT_FROM=$(CONVERT_FROM)) を LeRobot 形式に変換し、HDF5 と照合する (train イメージ。-> data/lerobot/$(DATASET)/)"
 	@echo "  train            data/lerobot/$(DATASET) で TRAIN_POLICY=$(TRAIN_POLICY) (act|smolvla|groot) を学習する (-> data/train/$(TRAIN_NAME)/)"
 	@echo "  colab-data       data/lerobot/$(DATASET) を 1 つの tar にする (Colab 用。-> data/colab/$(DATASET).tar。Drive へは手動で上げる)"
 	@echo "  import-policy    Colab の学習結果 FILE=<tar> を data/train/$(TRAIN_NAME)/ に展開する"
@@ -135,7 +140,7 @@ help:
 config:
 	@echo ".env: $(if $(wildcard .env),あり,なし)"
 	@echo "[対象と記録] TASK=$(TASK) DEVICE=$(DEVICE) DATASET=$(DATASET) RESUME=$(RESUME) FORCE=$(FORCE) LEADER_PORT=$(LEADER_PORT)"
-	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて))"
+	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) DAGGER_BETA=$(DAGGER_BETA)"
 	@echo "[sim]        SIM_DEVICE=$(SIM_DEVICE) TEX_BUDGET=$(or $(TEX_BUDGET),(Kit の既定 0.6))"
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
@@ -153,7 +158,7 @@ down:
 # Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
 stop:
 	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval \
-		leisaac-datagen leisaac-sweep-replay leisaac-sweep-inspect leisaac-convert leisaac-train leisaac-train-check leisaac-shell >/dev/null 2>&1
+		leisaac-datagen leisaac-dagger leisaac-sweep-replay leisaac-sweep-inspect leisaac-convert leisaac-train leisaac-train-check leisaac-shell >/dev/null 2>&1
 
 shell-sim:
 	$(COMPOSE) run --rm $(TTY_FLAG) --name leisaac-shell sim bash
@@ -193,6 +198,17 @@ datagen:
 	$(call SIM_RUN,leisaac-datagen) /opt/tools/sweep_eval.py --policy=planner --record --dataset_file=$(DATASET_FILE) \
 		--num_demos=$(NUM) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
+# DAgger のデータ。学習したポリシー (推論サーバ) で動かし、各フレームの計画器の action を正解として、すべてのラウンドを記録する
+dagger: policy-up
+	@if [ -e "$(DATASET_PATH)" ]; then \
+		echo "[エラー] $(DATASET_PATH) は既にあります。別の名前 (DATASET=...) を指定してください"; exit 1; \
+	fi
+	@mkdir -p $(dir $(SIM_RECORD)) && printf 'SIM_DEVICE=%s\nTEX_BUDGET=%s\n' "$(SIM_DEVICE)" "$(TEX_BUDGET)" > $(SIM_RECORD)
+	$(call SIM_RUN,leisaac-dagger) /opt/tools/sweep_eval.py --policy=remote --dagger --dagger_beta=$(DAGGER_BETA) --record \
+		--dataset_file=$(DATASET_FILE) --rounds=$(NUM) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
+		--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON) \
+		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+
 # datagen の記録を action で再生し、成功と最終位置を記録と比べる (結果は data/sweep/replay/<日時>/)
 sweep-replay:
 	$(check_sim_record)
@@ -209,7 +225,9 @@ convert:
 	@if [ -e "data/lerobot/$(DATASET)" ]; then \
 		echo "[エラー] data/lerobot/$(DATASET) は既にあります。別の名前で変換するか、不要なら消してください"; exit 1; \
 	fi
-	$(call TRAIN_RUN,leisaac-convert) /opt/tools/sweep_convert.py --dataset_file=$(DATASET_FILE) --root=/workspace/data/lerobot/$(DATASET)
+	@for d in $(CONVERT_FROM); do [ -e "data/datasets/$$d.hdf5" ] || { echo "[エラー] data/datasets/$$d.hdf5 がありません"; exit 1; }; done
+	$(call TRAIN_RUN,leisaac-convert) /opt/tools/sweep_convert.py --dataset_file $(foreach d,$(CONVERT_FROM),/workspace/data/datasets/$(d).hdf5) \
+		--root=/workspace/data/lerobot/$(DATASET)
 
 # LeRobot 形式のデータでポリシーを学習する。上書きも再開もしない (docs/sweep.md の「学習」)
 train:

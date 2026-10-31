@@ -59,7 +59,8 @@ results = []
 with open(f"{out_dir}/replay.jsonl", "w") as log:
     for i in episodes:
         episode = handler.load_episode(f"demo_{i}", env.device)
-        actions = episode.data["actions"]
+        # DAgger の記録 (sweep_eval.py --dagger) の actions は計画器の正解なので、実際に動かした action で再生する
+        actions = episode.data.get("executed_actions", episode.data["actions"])
         env.reset_to(episode.get_initial_state(), env_ids, is_relative=True)
         t0 = time.time()
         for k, action in enumerate(actions):

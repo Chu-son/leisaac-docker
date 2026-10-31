@@ -61,8 +61,9 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `sweep-check` | Sweep タスク（`LeIsaac-LeKiwi-Sweep-Floor-v0`）の確認。データの約束事と上流の変換の一致、ゴミの配置、成功の判定を確かめ、front と wrist の画像を `data/sweep/check/` に保存する（[docs/sweep.md](docs/sweep.md)） |
 | `sweep-eval` | Sweep タスクを `EVAL_POLICY` で `EVAL_ROUNDS` 回解き、成功率を測る。`planner` は計画器（特権情報を使う）、`remote` は学習したポリシー（先に `policy-up` を実行する）。結果は `data/sweep/eval/<日時>/` に残す |
 | `datagen` | Sweep タスクの自動生成。計画器が成功したエピソードだけを `NUM` 個、`data/datasets/$(DATASET).hdf5` に記録する（例: `make datagen DATASET=sweep_floor NUM=50`） |
+| `dagger` | 学習したポリシー（`TRAIN_NAME`。推論サーバを起動する）で `NUM` ラウンド動かし、各フレームの計画器の action を正解として、すべてのラウンドを `data/datasets/$(DATASET).hdf5` に記録する（DAgger。docs/sweep.md） |
 | `sweep-replay` | `datagen` の記録を再生し、記録どおりに成功するかを確かめる。`EPISODES="0 3"` で選ぶ。`HEADLESS=0` で GUI に表示する |
-| `convert` | `datagen` の記録を LeRobot 形式（lerobot 0.4.2、v3.0、30fps、動画は AV1）に変換し、`data/lerobot/$(DATASET)/` に出力する。読み直して、すべてのフレームを HDF5 と照合する（train イメージ） |
+| `convert` | `datagen` の記録（`CONVERT_FROM`。既定は `DATASET`。複数ならつなぐ）を LeRobot 形式（lerobot 0.4.2、v3.0、30fps、動画は AV1）に変換し、`data/lerobot/$(DATASET)/` に出力する。読み直して、すべてのフレームを HDF5 と照合する（train イメージ） |
 | `train` | `data/lerobot/$(DATASET)/` で `TRAIN_POLICY`（`act` / `smolvla` / `groot`）を学習し、`data/train/$(TRAIN_NAME)/` に出力する。GR00T はローカルでは学習できない（Colab で行う） |
 | `colab-data` / `import-policy` | Colab に渡すデータセットを `data/colab/$(DATASET).tar` にする / Colab の学習結果 `FILE=<tar>` を `data/train/$(TRAIN_NAME)/` に展開する（Drive との受け渡しはブラウザで手動。Colab 側は `notebooks/train_colab.ipynb`） |
 | `sweep-inspect` | `datagen` の記録を Kit なしで確かめる。一覧表、上から見た図（`overview.png`）、動画（`episode_*.mp4`）を `data/sweep/inspect/$(DATASET)/` に作る |
@@ -89,6 +90,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `EVAL_POLICY` / `TRAIN_CHECKPOINT` | `planner` / `last`（`sweep-eval` のポリシーと、推論サーバが読むチェックポイント） |
 | `EVAL_SEED` | 空（`sweep-eval` のシード。空なら現在時刻） |
 | `EVAL_VIDEOS` | `0`（`1` で `sweep-eval` がラウンドごとの動画と `overview.png` を残す） |
+| `CONVERT_FROM` / `DAGGER_BETA` | `DATASET` / `0`（`convert` でつなぐ記録と、`dagger` で計画器の action で動かす確率） |
 
 ## ディレクトリ構成
 
@@ -111,7 +113,7 @@ tools/
                       #   sweep_floor.py: 床のタスクの定義、sweep_mdp.py: 配置、ランダム化、成功の判定、
                       #   sweep_planner.py: 計画器
   sweep_check.py      # make sweep-check の本体
-  sweep_eval.py       # make sweep-eval / datagen の本体（ポリシーに N ラウンド解かせて成功率を測る。--record で記録）
+  sweep_eval.py       # make sweep-eval / datagen / dagger の本体（ポリシーに N ラウンド解かせて成功率を測る。--record で記録、--dagger で計画器の正解を記録）
   sweep_replay.py     # make sweep-replay の本体（記録の再生と再現の確認）
   sweep_inspect.py    # make sweep-inspect の本体（記録の一覧、図、動画。Kit なし）
   sweep_convert.py    # make convert の本体（HDF5 → LeRobot 形式と照合。train イメージ）

@@ -8,8 +8,12 @@
   隣り合うフレームの差は圧縮の差より小さいことがあるので、エピソードごとに、同じ番号のフレームとの差が、
   前後に 1 フレームずらしたときの差より小さいことも確かめる (フレームのずれの検出)
 - 変換元と結果は root の convert.json に残す
+- --dataset_file に複数の HDF5 を並べると、順につないで 1 つのデータセットにする (例: 計画器のデータと DAgger のデータ)。
+  datagen のエピソードは成功したものだけのはず。DAgger のエピソード (executed_actions がある。sweep_eval.py --dagger) は、
+  actions が計画器の正解なので、失敗したラウンドも使う
 """
 import argparse
+import contextlib
 import json
 import os
 import time
@@ -25,7 +29,7 @@ from leisaac_ext import contract
 MAX_IMAGE_MAE = 4.0
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("--dataset_file", required=True)
+parser.add_argument("--dataset_file", required=True, nargs="+", help="変換する HDF5 (複数なら順につなぐ)")
 parser.add_argument("--root", required=True, help="LeRobot 形式の出力先 (既にあれば止める)")
 parser.add_argument("--repo_id", default=None, help="データセットの名前 (省略時は local/<root の最後の名前>)")
 args = parser.parse_args()
@@ -50,17 +54,22 @@ def load_episode(group: h5py.Group) -> dict:
 
 
 t0 = time.time()
-with h5py.File(args.dataset_file, "r") as f:
-    data = f["data"]
-    names = [f"demo_{i}" for i in range(len(data))]
-    assert set(names) == set(data), f"エピソードの名前が demo_0 〜 demo_{len(data) - 1} になっていない: {sorted(data)}"
-    assert all(data[n].attrs.get("success") for n in names), "成功していないエピソードがある (datagen は成功したものだけを記録する)"
+with contextlib.ExitStack() as stack:
+    groups = []  # すべてのファイルのエピソード (h5py.Group) を順に並べたもの
+    for path in args.dataset_file:
+        data = stack.enter_context(h5py.File(path, "r"))["data"]
+        names = [f"demo_{i}" for i in range(len(data))]
+        assert set(names) == set(data), f"{path}: エピソードの名前が demo_0 〜 demo_{len(data) - 1} になっていない: {sorted(data)}"
+        failed = [n for n in names if not data[n].attrs.get("success") and "executed_actions" not in data[n]]
+        assert not failed, f"{path}: 成功していないエピソードがある (datagen は成功したものだけを記録する): {failed[:5]}"
+        groups += [data[n] for n in names]
+        print(f"{path}: {len(names)} episodes ({sum('executed_actions' in data[n] for n in names)} from DAgger)", flush=True)
 
     # robot_type は、実機の LeKiwi を lerobot で記録したときと同じ名前 (LeKiwiClient.name)
     dataset = LeRobotDataset.create(repo_id, contract.FPS, FEATURES, root=args.root, robot_type="lekiwi_client",
                                     image_writer_threads=8)
-    for i, name in enumerate(names):
-        episode = load_episode(data[name])
+    for i, group in enumerate(groups):
+        episode = load_episode(group)
         for t in range(len(episode["action"])):
             dataset.add_frame({**{k: v[t] for k, v in episode.items()}, "task": contract.INSTRUCTION})
         dataset.save_episode()
@@ -70,10 +79,10 @@ with h5py.File(args.dataset_file, "r") as f:
 
     # 読み直して、すべてのフレームを HDF5 と比べる
     loaded = LeRobotDataset(repo_id, root=args.root)
-    assert loaded.num_episodes == len(names), f"エピソードの数が違う: {loaded.num_episodes} != {len(names)}"
+    assert loaded.num_episodes == len(groups), f"エピソードの数が違う: {loaded.num_episodes} != {len(groups)}"
     problems, image_mae = [], {cam: [] for cam in contract.CAMERAS}
-    for i, name in enumerate(names):
-        episode = load_episode(data[name])
+    for i, group in enumerate(groups):
+        episode = load_episode(group)
         start, end = loaded.meta.episodes["dataset_from_index"][i], loaded.meta.episodes["dataset_to_index"][i]
         if end - start != len(episode["action"]):
             problems.append(f"episode {i}: フレームの数が違う ({end - start} != {len(episode['action'])})")

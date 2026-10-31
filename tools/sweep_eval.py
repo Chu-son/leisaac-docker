@@ -13,6 +13,11 @@
 並べた 30fps の実時間) と、全ラウンドの終わりの図を並べた overview.png も残す (leisaac_ext.sweep_video)。
 --record を付けると、成功したエピソードだけを HDF5 に記録する (isaaclab の RecorderManager。上流の teleop と同じ形式)。
 成功が num_demos 個になるか、ラウンドが rounds (既定は num_demos の 2 倍 + 10) に達したら終わる。
+--dagger (--policy remote と --record と一緒に使う) は DAgger のデータを作る。学習したポリシーの action で動かし
+(chunk ごとに確率 dagger_beta で計画器の action で動かす)、各フレームで計画器が出した action を正解として
+actions に記録する。実際に動かした action は executed_actions に残す。成功も失敗も、すべてのラウンドを記録する。
+計画器は台車の速度の指令を自分の前の指令から加速度の上限をかけて作るので、--dagger では毎フレーム、
+実際の台車の速度に合わせ直す (ポリシーが動かした後の状態から、どう立て直すかを正解にする)。
 """
 import argparse
 
@@ -33,6 +38,8 @@ parser.add_argument("--out_dir", default=None,
 parser.add_argument("--record", action="store_true", help="成功したエピソードを dataset_file に記録する (自動生成)")
 parser.add_argument("--dataset_file", default=None, help="記録先の HDF5 (--record。既にあれば止める)")
 parser.add_argument("--num_demos", type=int, default=50, help="記録する成功エピソードの数 (--record)")
+parser.add_argument("--dagger", action="store_true", help="DAgger のデータを作る (--policy remote と --record と一緒に使う)")
+parser.add_argument("--dagger_beta", type=float, default=0.0, help="--dagger で、chunk ごとに計画器の action で動かす確率")
 parser.add_argument("--videos", action="store_true", help="ラウンドごとの動画と overview.png を out_dir に残す")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -47,7 +54,8 @@ import cv2
 import gymnasium as gym
 import numpy as np
 import torch
-from isaaclab.managers import DatasetExportMode
+from isaaclab.envs.mdp.recorders.recorders_cfg import PreStepActionsRecorderCfg
+from isaaclab.managers import DatasetExportMode, RecorderTerm
 from isaaclab_tasks.utils import parse_env_cfg
 
 import leisaac  # noqa: F401
@@ -104,14 +112,31 @@ class RemotePolicy:
         return {"chunks": len(self.infer_ms), "infer_ms": round(float(np.mean(self.infer_ms)), 1) if self.infer_ms else None}
 
 
+class ExpertActionsRecorder(RecorderTerm):
+    """--dagger: actions に、実際に動かした action ではなく、計画器の action (env.expert_action) を記録する"""
+
+    def record_pre_step(self):
+        return "actions", self._env.expert_action
+
+
+class ExecutedActionsRecorder(RecorderTerm):
+    """--dagger: 実際に動かした action を executed_actions に記録する"""
+
+    def record_pre_step(self):
+        return "executed_actions", self._env.action_manager.action
+
+
+_BASE_IDX = [contract.SIM_JOINT_NAMES.index(j) for j in ("base_x", "base_y", "base_theta")]
 seed = args.seed if args.seed is not None else int(time.time())
+if args.dagger:
+    assert args.policy == "remote" and args.record, "--dagger は --policy remote と --record と一緒に使う"
 if args.record:
     assert args.dataset_file and args.dataset_file.endswith(".hdf5"), "--record には --dataset_file (.hdf5) が要る"
     # isaaclab の HDF5 の書き出しは、既存のファイルを上書きする
     assert not os.path.exists(args.dataset_file), f"{args.dataset_file} は既にある"
     dataset_stem = os.path.splitext(args.dataset_file)[0]
     out_dir = args.out_dir or f"{dataset_stem}.datagen"
-    max_rounds = args.rounds if args.rounds is not None else 2 * args.num_demos + 10
+    max_rounds = args.rounds if args.rounds is not None else (10 if args.dagger else 2 * args.num_demos + 10)
 else:
     out_dir = args.out_dir or f"/workspace/data/sweep/eval/{time.strftime('%Y%m%d-%H%M%S')}"
     max_rounds = args.rounds if args.rounds is not None else 10
@@ -125,6 +150,9 @@ if args.record:
     cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
     cfg.recorders.dataset_export_dir_path = os.path.dirname(args.dataset_file)
     cfg.recorders.dataset_filename = os.path.basename(dataset_stem)
+    if args.dagger:
+        cfg.recorders.record_pre_step_actions = PreStepActionsRecorderCfg(class_type=ExpertActionsRecorder)
+        cfg.recorders.record_pre_step_executed_actions = PreStepActionsRecorderCfg(class_type=ExecutedActionsRecorder)
 else:
     cfg.recorders = None
 cfg.seed = seed
@@ -140,9 +168,17 @@ if args.policy == "planner":
 else:
     policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon)
     print(f"policy=remote seed={seed} action_horizon={args.action_horizon} server={policy.server}", flush=True)
+expert = PlannerPolicy(env) if args.dagger else None
+rng = np.random.default_rng(seed)
 # 2 ラウンド目からは、前のラウンドの終わりの自動リセットが返した観測から始める。env.reset() を重ねると、
 # 記録中のエピソード (初期状態だけ) が、前のラウンドの success の値 (リセットでは消えない) で書き出される
 obs, _ = env.reset()
+if args.dagger:
+    # 失敗したラウンドも書き出す。ここまでの reset の、初期状態だけのエピソードは書き出さないように、
+    # 成功だけを書き出す設定で env を作り、ここで切り替える (書き出すかは、書き出すときの設定で決まる)
+    env.recorder_manager.cfg.dataset_export_mode = DatasetExportMode.EXPORT_ALL
+    # 書き出さなかったエピソードも、書き出した数に数えられるので、ここまでの数を差し引く
+    exported_before = env.recorder_manager.exported_successful_episode_count + env.recorder_manager.exported_failed_episode_count
 
 results = []
 start = time.time()
@@ -152,9 +188,11 @@ if args.videos:
     os.makedirs(f"{out_dir}/videos", exist_ok=True)
 with open(f"{out_dir}/rounds.jsonl", "w") as log:
     for r in range(max_rounds):
-        if args.record and n_ok >= args.num_demos:
+        if args.record and not args.dagger and n_ok >= args.num_demos:
             break
         policy.reset()
+        if expert:
+            expert.reset()
         t0, steps, success, done = time.time(), 0, False, False
         count = int(sweep_mdp.debris_in_target(env)[0].sum())
         # 台車の中心から最も近いゴミまでの距離の、ラウンド中の最小値。台車の外形の半径
@@ -165,9 +203,18 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
             debris_start, base_path = sweep_planner.read_state(env).debris, []
         while not done:
             chunk = policy.act(obs["policy"])
+            use_expert = expert is not None and rng.random() < args.dagger_beta
             for a in chunk:
                 joint_pos = obs["policy"]["joint_pos"][0].cpu().numpy().astype(np.float64)
                 sim_action = torch.tensor(contract.from_lerobot_action(a, joint_pos), device=env.device)[None]
+                if expert:
+                    # 計画器の速度の指令を、実際の台車の速度 (ワールド座標系) に合わせてから、正解の action を求める
+                    expert.planner.vel = obs["policy"]["joint_vel"][0].cpu().numpy().astype(np.float64)[_BASE_IDX]
+                    expert_action = torch.tensor(expert.planner.act(sweep_planner.read_state(env)), dtype=torch.float32,
+                                                 device=env.device)[None]
+                    env.expert_action = expert_action
+                    if use_expert:
+                        sim_action = expert_action
                 for _ in range(contract.SIM_STEPS_PER_FRAME):
                     # step の後は自動でリセットされるので、終わる前の個数を残しておく
                     inside = sweep_mdp.debris_in_target(env)[0]
@@ -197,7 +244,13 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         result = {"round": r, "success": success, "in_target": count, "sim_time": round(steps * env.step_dt, 2),
                   "base_min_dist": round(base_min_dist, 3), "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
-        if args.record:
+        if args.dagger:
+            # すべてのラウンドを記録する (HDF5 の demo_<ラウンドの番号>)
+            exported = (env.recorder_manager.exported_successful_episode_count
+                        + env.recorder_manager.exported_failed_episode_count - exported_before)
+            assert exported == r + 1, f"記録したエピソードの数 ({exported}) がラウンドの数 ({r + 1}) と合わない"
+            result["episode"] = r
+        elif args.record:
             # 記録したエピソードの番号 (HDF5 の demo_<番号>)。失敗したラウンドは記録しない
             exported = env.recorder_manager.exported_successful_episode_count
             assert exported == n_ok, f"記録したエピソードの数 ({exported}) が成功の数 ({n_ok}) と合わない"
@@ -224,13 +277,15 @@ if args.policy == "remote":
     # ping は、ここまでの推論サーバの VRAM のピークも返す
     summary.update(action_horizon=args.action_horizon, server=policy.client.call("ping")[0])
 if args.record:
-    summary.update(dataset_file=args.dataset_file, num_demos=n_ok,
+    summary.update(dataset_file=args.dataset_file, num_demos=n if args.dagger else n_ok,
                    dataset_bytes=os.path.getsize(args.dataset_file) if os.path.exists(args.dataset_file) else 0)
+if args.dagger:
+    summary.update(dagger=True, dagger_beta=args.dagger_beta)
 if maps:
     cv2.imwrite(f"{out_dir}/overview.png", cv2.cvtColor(sweep_video.overview(maps), cv2.COLOR_RGB2BGR))
 with open(f"{out_dir}/summary.json", "w") as f:
     json.dump(summary, f, indent=2)
-print(f"SWEEP {'DATAGEN' if args.record else 'EVAL'} {n_ok}/{n} ({p:.0%}, 95% CI {summary['ci95'][0]:.0%}-{summary['ci95'][1]:.0%}) "
+print(f"SWEEP {'DAGGER' if args.dagger else 'DATAGEN' if args.record else 'EVAL'} {n_ok}/{n} ({p:.0%}, 95% CI {summary['ci95'][0]:.0%}-{summary['ci95'][1]:.0%}) "
       f"policy={args.policy} seed={seed} -> {out_dir}", flush=True)
 env.close()
 app.close()

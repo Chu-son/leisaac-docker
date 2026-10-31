@@ -439,6 +439,22 @@ make train DATASET=sweep_floor200               # ACT、100,000 step、batch 8�
 - それでも、目標領域に 1 個も入らない失敗が 13 回中 5〜10 回あり、台車がゴミに当たるラウンドも 13〜20/30 残っています。
 - この結果は 1 回の評価です。他のポリシーや設定と比べるときは、docs/evaluation.md に従います（1 回の結果だけで差があると結論しない）。途中のチェックポイント（`TRAIN_CHECKPOINT=020000` など）や `ACTION_HORIZON` での違いは、まだ測っていません。
 
+## DAgger（`make dagger`）
+
+計画器のデータだけで学習したポリシーは、少しずれると計画器のデータにない状態（台車がゴミに近すぎるなど）に入り、立て直せないことがあります（[sweep_experiments.md](sweep_experiments.md)）。DAgger は、学習したポリシーで動かし、ポリシーが行った先の状態で計画器が出す action を正解として記録し、元のデータに足して学習し直す方法です。計画器は sim の真値を読むので、どの状態からでも正解を出せます。
+
+```bash
+make dagger DATASET=sweep_dagger1 TRAIN_NAME=sweep_floor200-act NUM=50     # 50 ラウンド。推論サーバを起動してから動かす
+make convert DATASET=sweep_floor200_dagger1 CONVERT_FROM="sweep_floor200 sweep_dagger1"
+make train DATASET=sweep_floor200_dagger1
+make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_floor200_dagger1-act EVAL_ROUNDS=30 EVAL_SEED=1793361616
+```
+
+- 中身は `sweep_eval.py --policy remote --record --dagger`。学習したポリシーの action で動かし（chunk ごとに確率 `DAGGER_BETA` で計画器の action で動かす。既定 0）、各フレームで計画器が出した action を `actions` に、実際に動かした action を `executed_actions` に記録します（isaaclab の記録の項目を差し替える。形式は datagen と同じ）。成功も失敗も、すべてのラウンドを記録します。
+- 計画器は、台車の速度の指令を「自分の前の指令」から加速度の上限をかけて作ります。ポリシーが動かした後では前の指令と実際の速度が違うので、DAgger では毎フレーム、前の指令を実際の台車の速度に合わせ直してから正解を求めます。計画器の状態（どの掃きの途中か）はそのまま進み、押し終わっていないゴミがあれば計画し直します。
+- `make convert` は `CONVERT_FROM` に並べた記録を順につなぎます。datagen の記録は成功したエピソードだけのはずなので、失敗があれば止めますが、DAgger のエピソード（`executed_actions` がある）は失敗したものも使います。`make sweep-replay` は DAgger の記録を `executed_actions` で再生し、`make sweep-inspect` は失敗したラウンドを問題として数えません。
+- `make check` の 6 番目で、datagen と DAgger の合成データをつないで変換できることを確かめます。
+
 ## 実機との差（既知）
 
 | 項目 | sim | 実機 | 対応 |
