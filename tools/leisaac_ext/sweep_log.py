@@ -27,9 +27,11 @@ FORMAT_VERSION = 1
 
 
 def _np(x) -> np.ndarray:
+    """コピーした numpy 配列。CPU の tensor の .numpy() は元とメモリを共有し、isaaclab のデータのバッファ
+    (joint_pos など) は同じ場所に上書きされるので、コピーしないと後の値に変わる"""
     if hasattr(x, "detach"):
         x = x.detach().cpu().numpy()
-    return np.asarray(x)
+    return np.array(x, copy=True)
 
 
 def _flatten(prefix: str, nested: dict, out: dict) -> dict:
