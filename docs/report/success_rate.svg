@@ -1,0 +1,89 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='760' height='330' viewBox='0 0 760 330' font-family='Noto Sans CJK JP, sans-serif'>
+<rect width='760' height='330' fill='#fcfcfb'/>
+<line x1='52' x2='744' y1='268.0' y2='268.0' stroke='#c3c2b7' stroke-width='1'/>
+<text x='46' y='272.0' font-size='11' fill='#898781' text-anchor='end'>0%</text>
+<line x1='52' x2='744' y1='212.0' y2='212.0' stroke='#e1e0d9' stroke-width='1'/>
+<text x='46' y='216.0' font-size='11' fill='#898781' text-anchor='end'>25%</text>
+<line x1='52' x2='744' y1='156.0' y2='156.0' stroke='#e1e0d9' stroke-width='1'/>
+<text x='46' y='160.0' font-size='11' fill='#898781' text-anchor='end'>50%</text>
+<line x1='52' x2='744' y1='100.0' y2='100.0' stroke='#e1e0d9' stroke-width='1'/>
+<text x='46' y='104.0' font-size='11' fill='#898781' text-anchor='end'>75%</text>
+<line x1='52' x2='744' y1='44.0' y2='44.0' stroke='#e1e0d9' stroke-width='1'/>
+<text x='46' y='48.0' font-size='11' fill='#898781' text-anchor='end'>100%</text>
+<path d='M71.6,268.0 V219.7 Q71.6,215.7 75.6,215.7 H97.6 Q101.6,215.7 101.6,219.7 V268.0 Z' fill='#2a78d6'/>
+<line x1='86.6' x2='86.6' y1='241.6' y2='176.3' stroke='#52514e' stroke-width='1.5'/>
+<line x1='81.6' x2='91.6' y1='241.6' y2='241.6' stroke='#52514e' stroke-width='1.5'/>
+<line x1='81.6' x2='91.6' y1='176.3' y2='176.3' stroke='#52514e' stroke-width='1.5'/>
+<text x='103.6' y='172.3' font-size='11' fill='#0b0b0b' text-anchor='middle'>7/30</text>
+<text x='86.6' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>1</text>
+<text x='86.6' y='302' font-size='11' fill='#52514e' text-anchor='middle'>ACT 50</text>
+<path d='M140.8,268.0 V145.1 Q140.8,141.1 144.8,141.1 H166.8 Q170.8,141.1 170.8,145.1 V268.0 Z' fill='#2a78d6'/>
+<line x1='155.8' x2='155.8' y1='180.2' y2='105.3' stroke='#52514e' stroke-width='1.5'/>
+<line x1='150.8' x2='160.8' y1='180.2' y2='180.2' stroke='#52514e' stroke-width='1.5'/>
+<line x1='150.8' x2='160.8' y1='105.3' y2='105.3' stroke='#52514e' stroke-width='1.5'/>
+<text x='172.8' y='101.3' font-size='11' fill='#0b0b0b' text-anchor='middle'>17/30</text>
+<text x='155.8' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>3</text>
+<text x='155.8' y='302' font-size='11' fill='#52514e' text-anchor='middle'>ACT 200</text>
+<path d='M210.0,268.0 V167.5 Q210.0,163.5 214.0,163.5 H236.0 Q240.0,163.5 240.0,167.5 V268.0 Z' fill='#eb6834'/>
+<line x1='225.0' x2='225.0' y1='200.3' y2='125.0' stroke='#52514e' stroke-width='1.5'/>
+<line x1='220.0' x2='230.0' y1='200.3' y2='200.3' stroke='#52514e' stroke-width='1.5'/>
+<line x1='220.0' x2='230.0' y1='125.0' y2='125.0' stroke='#52514e' stroke-width='1.5'/>
+<text x='242.0' y='121.0' font-size='11' fill='#0b0b0b' text-anchor='middle'>14/30</text>
+<text x='225.0' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>4</text>
+<text x='225.0' y='302' font-size='11' fill='#52514e' text-anchor='middle'>SmolVLA</text>
+<path d='M279.2,268.0 V182.4 Q279.2,178.4 283.2,178.4 H305.2 Q309.2,178.4 309.2,182.4 V268.0 Z' fill='#eb6834'/>
+<line x1='294.2' x2='294.2' y1='212.9' y2='138.8' stroke='#52514e' stroke-width='1.5'/>
+<line x1='289.2' x2='299.2' y1='212.9' y2='212.9' stroke='#52514e' stroke-width='1.5'/>
+<line x1='289.2' x2='299.2' y1='138.8' y2='138.8' stroke='#52514e' stroke-width='1.5'/>
+<text x='311.2' y='134.8' font-size='11' fill='#0b0b0b' text-anchor='middle'>12/30</text>
+<text x='294.2' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>5</text>
+<text x='294.2' y='302' font-size='11' fill='#52514e' text-anchor='middle'>DAgger</text>
+<path d='M348.4,268.0 V115.2 Q348.4,111.2 352.4,111.2 H374.4 Q378.4,111.2 378.4,115.2 V268.0 Z' fill='#2a78d6'/>
+<line x1='363.4' x2='363.4' y1='151.2' y2='81.3' stroke='#52514e' stroke-width='1.5'/>
+<line x1='358.4' x2='368.4' y1='151.2' y2='151.2' stroke='#52514e' stroke-width='1.5'/>
+<line x1='358.4' x2='368.4' y1='81.3' y2='81.3' stroke='#52514e' stroke-width='1.5'/>
+<text x='380.4' y='77.3' font-size='11' fill='#0b0b0b' text-anchor='middle'>21/30</text>
+<text x='363.4' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>6</text>
+<text x='363.4' y='302' font-size='11' fill='#52514e' text-anchor='middle'>見失わない</text>
+<path d='M417.6,268.0 V167.5 Q417.6,163.5 421.6,163.5 H443.6 Q447.6,163.5 447.6,167.5 V268.0 Z' fill='#eb6834'/>
+<line x1='432.6' x2='432.6' y1='200.3' y2='125.0' stroke='#52514e' stroke-width='1.5'/>
+<line x1='427.6' x2='437.6' y1='200.3' y2='200.3' stroke='#52514e' stroke-width='1.5'/>
+<line x1='427.6' x2='437.6' y1='125.0' y2='125.0' stroke='#52514e' stroke-width='1.5'/>
+<text x='449.6' y='121.0' font-size='11' fill='#0b0b0b' text-anchor='middle'>14/30</text>
+<text x='432.6' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>7</text>
+<text x='432.6' y='302' font-size='11' fill='#52514e' text-anchor='middle'>DAgger</text>
+<path d='M486.8,268.0 V107.7 Q486.8,103.7 490.8,103.7 H512.8 Q516.8,103.7 516.8,107.7 V268.0 Z' fill='#2a78d6'/>
+<line x1='501.8' x2='501.8' y1='143.6' y2='75.8' stroke='#52514e' stroke-width='1.5'/>
+<line x1='496.8' x2='506.8' y1='143.6' y2='143.6' stroke='#52514e' stroke-width='1.5'/>
+<line x1='496.8' x2='506.8' y1='75.8' y2='75.8' stroke='#52514e' stroke-width='1.5'/>
+<text x='518.8' y='71.8' font-size='11' fill='#0b0b0b' text-anchor='middle'>22/30</text>
+<text x='501.8' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>8</text>
+<text x='501.8' y='302' font-size='11' fill='#52514e' text-anchor='middle'>カメラ</text>
+<path d='M556.0,268.0 V85.3 Q556.0,81.3 560.0,81.3 H582.0 Q586.0,81.3 586.0,85.3 V268.0 Z' fill='#2a78d6'/>
+<line x1='571.0' x2='571.0' y1='119.2' y2='60.4' stroke='#52514e' stroke-width='1.5'/>
+<line x1='566.0' x2='576.0' y1='119.2' y2='119.2' stroke='#52514e' stroke-width='1.5'/>
+<line x1='566.0' x2='576.0' y1='60.4' y2='60.4' stroke='#52514e' stroke-width='1.5'/>
+<text x='588.0' y='56.4' font-size='11' fill='#0b0b0b' text-anchor='middle'>25/30</text>
+<text x='571.0' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>8'</text>
+<text x='571.0' y='302' font-size='11' fill='#52514e' text-anchor='middle'>40 秒</text>
+<path d='M625.2,268.0 V227.2 Q625.2,223.2 629.2,223.2 H651.2 Q655.2,223.2 655.2,227.2 V268.0 Z' fill='#eb6834'/>
+<line x1='640.2' x2='640.2' y1='246.7' y2='184.4' stroke='#52514e' stroke-width='1.5'/>
+<line x1='635.2' x2='645.2' y1='246.7' y2='246.7' stroke='#52514e' stroke-width='1.5'/>
+<line x1='635.2' x2='645.2' y1='184.4' y2='184.4' stroke='#52514e' stroke-width='1.5'/>
+<text x='657.2' y='180.4' font-size='11' fill='#0b0b0b' text-anchor='middle'>6/30</text>
+<text x='640.2' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>9</text>
+<text x='640.2' y='302' font-size='11' fill='#52514e' text-anchor='middle'>後退なし</text>
+<path d='M694.4,268.0 V62.9 Q694.4,58.9 698.4,58.9 H720.4 Q724.4,58.9 724.4,62.9 V268.0 Z' fill='#2a78d6'/>
+<line x1='709.4' x2='709.4' y1='91.8' y2='48.1' stroke='#52514e' stroke-width='1.5'/>
+<line x1='704.4' x2='714.4' y1='91.8' y2='91.8' stroke='#52514e' stroke-width='1.5'/>
+<line x1='704.4' x2='714.4' y1='48.1' y2='48.1' stroke='#52514e' stroke-width='1.5'/>
+<text x='726.4' y='44.1' font-size='11' fill='#0b0b0b' text-anchor='middle'>28/30</text>
+<text x='709.4' y='286' font-size='12' fill='#0b0b0b' text-anchor='middle'>10</text>
+<text x='709.4' y='302' font-size='11' fill='#52514e' text-anchor='middle'>回り込み</text>
+<text x='52' y='18' font-size='13' fill='#0b0b0b' font-weight='bold'>ACT などの成功率（30 ラウンド、ひげは 95% 信頼区間）</text>
+<rect x='52' y='27' width='10' height='10' rx='2' fill='#2a78d6'/>
+<text x='66' y='36' font-size='11' fill='#52514e'>採用した変更</text>
+<rect x='182' y='27' width='10' height='10' rx='2' fill='#eb6834'/>
+<text x='196' y='36' font-size='11' fill='#52514e'>採らなかった変更</text>
+<text x='52' y='324' font-size='11' fill='#898781'>実験の番号（docs/sweep_experiments.md）。8 までは制限時間 25 秒、8' 以降は 40 秒</text>
+</svg>
