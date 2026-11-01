@@ -7,7 +7,7 @@
     planner: 計画器 (leisaac_ext.sweep_planner)。sim の真値を読む
     remote:  推論サーバ (tools/policy_server.py。make policy-up) につなぐ。観測 (カメラと関節の状態) だけを送り、
              action の系列の先頭 action_horizon 個を受け取る (leisaac_ext.remote)
-成功は終了条件 success (10 個中 8 個以上が目標領域に入る)。時間切れ (既定は 25 秒。--time_limit で変える) は失敗。
+成功は終了条件 success (10 個中 8 個以上が目標領域に入る)。時間切れ (タスクの既定は 40 秒。--time_limit で変える) は失敗。
 結果は out_dir の rounds.jsonl (ラウンドごと) と summary.json に残す。view_fraction は、押し終わっていないゴミが
 front カメラの水平の画角に入っていたフレームの割合 (ゴミを見失わずに動けているかの目安)。
 状態の記録 (leisaac_ext.sweep_log) も常に残す: run.json (構成)、env_cfg.yaml、states/round_<番号>.npz (ラウンドの初めの
@@ -43,7 +43,7 @@ parser.add_argument("--dataset_file", default=None, help="記録先の HDF5 (--r
 parser.add_argument("--num_demos", type=int, default=50, help="記録する成功エピソードの数 (--record)")
 parser.add_argument("--dagger", action="store_true", help="DAgger のデータを作る (--policy remote と --record と一緒に使う)")
 parser.add_argument("--dagger_beta", type=float, default=0.0, help="--dagger で、chunk ごとに計画器の action で動かす確率")
-parser.add_argument("--time_limit", type=float, default=None, help="1 ラウンドの制限時間 (秒。省略時はタスクの既定の 25 秒)")
+parser.add_argument("--time_limit", type=float, default=None, help="1 ラウンドの制限時間 (秒。省略時はタスクの既定の 40 秒)")
 parser.add_argument("--videos", action="store_true", help="ラウンドごとの動画と overview.png を out_dir に残す")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()

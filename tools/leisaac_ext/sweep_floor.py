@@ -214,6 +214,9 @@ RANDOMIZATIONS = ("debris_mass", "debris_friction", "debris_color", "light", "ca
 DEFAULT_RANDOMIZATION = ("debris_color", "light", "camera")
 
 
+EPISODE_LENGTH_S = 40.0
+
+
 @configclass
 class SweepFloorEnvCfg(LeKiwiTaskEnvCfg):
     scene: SweepFloorSceneCfg = SweepFloorSceneCfg(num_envs=1, env_spacing=FLOOR_SIZE[0])
@@ -227,6 +230,9 @@ class SweepFloorEnvCfg(LeKiwiTaskEnvCfg):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        # 1 エピソードの制限時間。計画器は後退しないので、目標領域がロボットとゴミの間にある配置では回り込みと
+        # 向きの切り替えに時間がかかる (25 秒では 30 回中 3 回時間切れ。docs/sweep_experiments.md の実験 9)
+        self.episode_length_s = EPISODE_LENGTH_S
         self.viewer.eye = (0.0, -1.0, 1.4)
         self.viewer.lookat = (0.0, 1.0, 0.0)
 
