@@ -64,6 +64,7 @@ sim は常駐させず、`make` のコマンドごとに使い捨てのコンテ
 | `dagger` | 学習したポリシー（`TRAIN_NAME`。推論サーバを起動する）で `NUM` ラウンド動かし、各フレームの計画器の action を正解として、すべてのラウンドを `data/datasets/$(DATASET).hdf5` に記録する（DAgger。docs/sweep.md） |
 | `sweep-camera-probe` | カメラの取り付けの候補を、計画器で動かした同じ場面で描き比べる（`data/sweep/camera_probe/`。docs/sweep.md の「カメラの見直し」） |
 | `sweep-replay` | `datagen` の記録を再生し、記録どおりに成功するかを確かめる。`EPISODES="0 3"` で選ぶ。`HEADLESS=0` で GUI に表示する。`EVAL_RUN=<日時>` なら評価の状態の記録（`data/sweep/eval/<日時>/states/`）を再生し、`EVAL_VIDEOS=1` で動画を作り直す |
+| `sweep-render` | 評価の状態の記録（`EVAL_RUN=<日時>`）を、俯瞰のカメラを足して描き直し、紹介用の動画（1920×1080。左に俯瞰、右に front、wrist、上から見た図）を `data/sweep/eval/<日時>/render/` に作る。物理は進めず、記録した状態を書き戻すので、評価のときの動きがそのまま再現される。`EPISODES="9 13"` で選び、`RENDER_TITLE` で見出しを付ける |
 | `convert` | `datagen` の記録（`CONVERT_FROM`。既定は `DATASET`。複数ならつなぐ）を LeRobot 形式（lerobot 0.4.2、v3.0、30fps、動画は AV1）に変換し、`data/lerobot/$(DATASET)/` に出力する。読み直して、すべてのフレームを HDF5 と照合する（train イメージ） |
 | `train` | `data/lerobot/$(DATASET)/` で `TRAIN_POLICY`（`act` / `smolvla` / `groot`）を学習し、`data/train/$(TRAIN_NAME)/` に出力する。GR00T はローカルでは学習できない（Colab で行う） |
 | `colab-data` / `import-policy` | Colab に渡すデータセットを `data/colab/$(DATASET).tar` にする / Colab の学習結果 `FILE=<tar>` を `data/train/$(TRAIN_NAME)/` に展開する（Drive との受け渡しはブラウザで手動。Colab 側は `notebooks/train_colab.ipynb`） |
@@ -116,6 +117,7 @@ tools/
   sweep_check.py      # make sweep-check の本体
   sweep_eval.py       # make sweep-eval / datagen / dagger の本体（ポリシーに N ラウンド解かせて成功率を測る。--record で記録、--dagger で計画器の正解を記録）
   sweep_replay.py     # make sweep-replay の本体（記録の再生と再現の確認）
+  sweep_render.py     # make sweep-render の本体（評価の状態の記録を、俯瞰のカメラを足して描き直す）
   sweep_inspect.py    # make sweep-inspect の本体（記録の一覧、図、動画。Kit なし）
   sweep_convert.py    # make convert の本体（HDF5 → LeRobot 形式と照合。train イメージ）
   sweep_train.py      # make train の本体（lerobot-train を呼ぶ。Colab でも同じものを使う）

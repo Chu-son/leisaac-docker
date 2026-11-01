@@ -221,6 +221,8 @@ def apply_setup(env, arrays: dict, env_id: int = 0) -> None:
         material[env_id] = torch.as_tensor(arrays["setup/debris/material"][i])
         view.set_material_properties(material, cpu_ids)
     for name in camera_names(env):
+        if f"setup/camera/{name}/local_pos" not in arrays:  # 記録の後に足したカメラ (sweep_render.py の俯瞰)
+            continue
         pos = torch.as_tensor(arrays[f"setup/camera/{name}/local_pos"], device=env.device)[None]
         quat = torch.as_tensor(arrays[f"setup/camera/{name}/local_quat"], device=env.device)[None]
         env.scene[name]._view.set_local_poses(translations=pos, orientations=quat, indices=ids)

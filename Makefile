@@ -46,6 +46,8 @@ EVAL_VIDEOS       ?= 0
 EVAL_TIME_LIMIT   ?=
 # sweep-replay で再生する評価 (data/sweep/eval/<EVAL_RUN>/ の状態の記録)。空なら DATASET の datagen の記録を再生する
 EVAL_RUN          ?=
+# sweep-render の動画の左上に出す見出し (例: "ACT (exp 10)")。英数字のみ (OpenCV の文字)
+RENDER_TITLE      ?=
 
 # --- 学習 (train)。出力先は data/train/$(TRAIN_NAME)/。TRAIN_STEPS / TRAIN_BATCH が空なら sweep_train.py の既定
 TRAIN_POLICY ?= act
@@ -110,7 +112,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen dagger sweep-replay sweep-camera-probe sweep-inspect convert train colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen dagger sweep-replay sweep-render sweep-camera-probe sweep-inspect convert train colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -126,6 +128,7 @@ help:
 	@echo "  dagger           学習したポリシー (TRAIN_NAME) で NUM 回動かし、計画器の action を正解として記録する (DAgger。-> $(DATASET_PATH))"
 	@echo "  sweep-camera-probe  カメラの取り付けの候補を、同じ場面で描き比べる (-> data/sweep/camera_probe/)"
 	@echo "  sweep-replay     datagen の記録 (EVAL_RUN=<日時> なら評価の状態の記録) を再生し、再現できるかを確かめる (EPISODES で選ぶ。HEADLESS=0 で GUI 表示)"
+	@echo "  sweep-render     評価の状態の記録 (EVAL_RUN=<日時>) を俯瞰のカメラを足して描き直し、紹介用の動画にする (EPISODES で選ぶ。-> data/sweep/eval/<日時>/render/)"
 	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
 	@echo "  convert          datagen の記録 (CONVERT_FROM=$(CONVERT_FROM)) を LeRobot 形式に変換し、HDF5 と照合する (train イメージ。-> data/lerobot/$(DATASET)/)"
 	@echo "  train            data/lerobot/$(DATASET) で TRAIN_POLICY=$(TRAIN_POLICY) (act|smolvla|groot) を学習する (-> data/train/$(TRAIN_NAME)/)"
@@ -153,7 +156,7 @@ config:
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
-	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 40 秒)) EVAL_RUN=$(or $(EVAL_RUN),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
+	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 40 秒)) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
 	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
@@ -166,7 +169,7 @@ down:
 # Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
 stop:
 	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval \
-		leisaac-datagen leisaac-dagger leisaac-sweep-replay leisaac-sweep-camera-probe leisaac-sweep-inspect leisaac-convert leisaac-train leisaac-train-check leisaac-shell >/dev/null 2>&1
+		leisaac-datagen leisaac-dagger leisaac-sweep-replay leisaac-sweep-render leisaac-sweep-camera-probe leisaac-sweep-inspect leisaac-convert leisaac-train leisaac-train-check leisaac-shell >/dev/null 2>&1
 
 shell-sim:
 	$(COMPOSE) run --rm $(TTY_FLAG) --name leisaac-shell sim bash
@@ -229,6 +232,13 @@ else
 		--out_dir=/workspace/data/sweep/eval/$(EVAL_RUN)/replay $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		$(if $(EPISODES),--episodes $(EPISODES)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 endif
+
+# 評価の状態の記録を、俯瞰のカメラを足して描き直す (物理は進めず、記録した状態を書き戻す。-> data/sweep/eval/<EVAL_RUN>/render/)
+sweep-render:
+	@test -n "$(EVAL_RUN)" || { echo "[エラー] EVAL_RUN=<日時> を指定してください (data/sweep/eval/<日時>/)"; exit 1; }
+	@test -d data/sweep/eval/$(EVAL_RUN)/states || { echo "[エラー] data/sweep/eval/$(EVAL_RUN)/states がありません"; exit 1; }
+	$(call SIM_RUN,leisaac-sweep-render) /opt/tools/sweep_render.py --eval_dir=/workspace/data/sweep/eval/$(EVAL_RUN) \
+		$(if $(EPISODES),--rounds $(EPISODES)) $(if $(RENDER_TITLE),--title "$(RENDER_TITLE)") $(SIM_ARGS) --enable_cameras --headless
 
 # カメラの取り付けの候補を同じ場面で描き比べる (-> data/sweep/camera_probe/)。候補は tools/sweep_camera_probe.py の中
 sweep-camera-probe:
