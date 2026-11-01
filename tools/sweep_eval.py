@@ -7,7 +7,7 @@
     planner: 計画器 (leisaac_ext.sweep_planner)。sim の真値を読む
     remote:  推論サーバ (tools/policy_server.py。make policy-up) につなぐ。観測 (カメラと関節の状態) だけを送り、
              action の系列の先頭 action_horizon 個を受け取る (leisaac_ext.remote)
-成功は終了条件 success (10 個中 8 個以上が目標領域に入る)。時間切れ (25 秒) は失敗。
+成功は終了条件 success (10 個中 8 個以上が目標領域に入る)。時間切れ (既定は 25 秒。--time_limit で変える) は失敗。
 結果は out_dir の rounds.jsonl (ラウンドごと) と summary.json に残す。view_fraction は、押し終わっていないゴミが
 front カメラの水平の画角に入っていたフレームの割合 (ゴミを見失わずに動けているかの目安)。
 状態の記録 (leisaac_ext.sweep_log) も常に残す: run.json (構成)、env_cfg.yaml、states/round_<番号>.npz (ラウンドの初めの
@@ -43,6 +43,7 @@ parser.add_argument("--dataset_file", default=None, help="記録先の HDF5 (--r
 parser.add_argument("--num_demos", type=int, default=50, help="記録する成功エピソードの数 (--record)")
 parser.add_argument("--dagger", action="store_true", help="DAgger のデータを作る (--policy remote と --record と一緒に使う)")
 parser.add_argument("--dagger_beta", type=float, default=0.0, help="--dagger で、chunk ごとに計画器の action で動かす確率")
+parser.add_argument("--time_limit", type=float, default=None, help="1 ラウンドの制限時間 (秒。省略時はタスクの既定の 25 秒)")
 parser.add_argument("--videos", action="store_true", help="ラウンドごとの動画と overview.png を out_dir に残す")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -171,6 +172,8 @@ if args.record:
 else:
     cfg.recorders = None
 cfg.seed = seed
+if args.time_limit is not None:
+    cfg.episode_length_s = args.time_limit
 if args.randomize is not None:
     names = sweep_floor.RANDOMIZATIONS if args.randomize == "all" else [n for n in args.randomize.split(",") if n]
     cfg.set_randomization(names)
@@ -322,7 +325,7 @@ summary = {"task": args.task, "policy": args.policy, "seed": seed, "rounds": n, 
            "base_contact_rounds": sum(x["base_min_dist"] < sweep_planner.BASE_RADIUS for x in results),
            # 押し終わっていないゴミが front カメラの画角に入っていたフレームの割合 (ラウンドの平均)
            "mean_view_fraction": round(float(np.mean([x["view_fraction"] for x in results])), 3) if n else None,
-           "wall_time": round(time.time() - start, 1), "device": args.device}
+           "time_limit": cfg.episode_length_s, "wall_time": round(time.time() - start, 1), "device": args.device}
 if args.policy == "remote":
     # ping は、ここまでの推論サーバの VRAM のピークも返す
     summary.update(action_horizon=args.action_horizon, server=policy.client.call("ping")[0])
