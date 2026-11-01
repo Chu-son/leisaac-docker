@@ -194,7 +194,7 @@ for name, p in (("planner", policy if args.policy == "planner" else None), ("exp
     if p is not None:
         policy_info[name] = {"arm_heights": list(p.poses.heights), "arm_q": p.poses.q.round(6).tolist(),
                              "brush_tip": p.poses.tip.round(6).tolist(), "arm_travel": p.poses.travel.round(6).tolist(),
-                             "params": vars(p.planner.params)}
+                             "params": vars(p.planner.params), "phases": list(sweep_planner.PHASES)}
 sweep_log.write_run(out_dir, env, {"task": args.task, "seed": seed, "args": vars(args), "policy": policy_info,
                                    "contract": {"fps": contract.FPS, "sim_steps_per_frame": contract.SIM_STEPS_PER_FRAME,
                                                 "sim_joint_names": list(contract.SIM_JOINT_NAMES),
@@ -266,6 +266,8 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                             view_frames += in_view
                             pending_frames += 1
                         extra = {"expert_action": env.expert_action[0]} if expert else {}
+                        if args.policy == "planner":  # 計画器の段階 (sweep_planner.PHASES の番号)
+                            extra["planner_phase"] = np.int8(sweep_planner.PHASES.index(policy.planner.phase))
                         # in_view: 押し終わっていないゴミが front の画角に入っているか (1/0。押し終わっていなければ -1)
                         round_log.add(steps, sim_action[0], inside=inside, in_view=np.int8(-1 if in_view is None else in_view),
                                       chunk_start=k == 0 and sub == 0, **extra)

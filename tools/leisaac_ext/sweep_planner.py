@@ -1,12 +1,17 @@
 """Sweep の計画器 (特権情報を使う古典的な手法)。docs/sweep.md の「計画器」
 
 1 回の掃き: アームを移動の姿勢にして台車を開始位置へ動かし、穂を床に押し当てて、台車をまっすぐ前に進め、
-穂先の前のゴミを目標領域まで押す。穂を上げて、次の掃きを選ぶ。これを繰り返す。
+穂先の前のゴミを目標領域まで押す。穂を上げ、掃いた跡に沿って下がりながら残りのゴミの方へ向きを変え、
+次の掃きを選ぶ。これを繰り返す。
+- 押した後の後退は、押した直後に通った跡 (ゴミを押し出した後で空いている) を戻るだけにする。押した後は、こぼれた
+  ゴミが台車の横や後ろにあり、front カメラに写らない。下がりながら向きを変えて、それを画面に入れる
+  (docs/sweep_experiments.md の実験 10)。
+- 開始位置へは、押し終わっていないゴミの重心を向いたまま、重心のまわりを、半径を保つか縮めながら回り込み
+  (orbit_route。台車から見て横か前へ進む)、開始位置の APPROACH 手前から前へ進んで入る。後退するのは、押した後に
+  掃いた跡を戻るときだけにする。回り込む道がゴミに近すぎるときは、ゴミを囲む円を経由する (plan_route)。
 - 移動の間は、学習するポリシーが front カメラでゴミを見失わないようにする (docs/sweep_experiments.md の実験 6)。
-  アームは穂が front カメラの床を隠さない姿勢 (既定の姿勢) にし、台車は押し終わっていないゴミの方を向けて動かす。
-- 台車は、front カメラに写らない向き (後ろや横) へは進まない (docs/sweep_experiments.md の実験 9)。進む向きが
-  front カメラの水平の画角 (MOTION_HALF_ANGLE) に入るように向きを決め、入らなければその場で向きを変えてから進む。
-  開始位置へは、掃く向きの APPROACH 手前を経由して、前へ進んで入る。
+  アームは穂が front カメラの床を隠さない姿勢 (既定の姿勢) にし、台車は押し終わっていないゴミの方を向けたまま動かす
+  (台車は全方向に動けるので、向きと通り道は独立に決められる)。
 - 入力は SweepState (ゴミの位置、目標領域の位置、台車の姿勢、アームの関節位置) だけで、シーンに依存しない。
   位置は env の原点からの相対値 (m)。台車の向き theta は base_theta (0 で +y を向く。前は (-sin, cos)、右は (cos, sin))。
 - 出力は sim の action (lekiwi-leader の構成、9 次元。台車の速度はワールド座標系)。
@@ -20,7 +25,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from . import contract, sweep_floor, sweep_mdp
+from . import contract, sweep_mdp
 from .broom import BRUSH_TIP, HEAD_SIZE
 
 # 台車の外形 (車輪を含む) が収まる円の半径 (m)
@@ -45,15 +50,20 @@ ARM_INIT_TIME = 1.0
 ARM_MOVE_TIME = 0.5
 # 移動の姿勢と、穂を上げた姿勢の間。穂を上げた後は台車を動かしながら移動の姿勢へ移し、開始位置の LOOK_NEAR 手前から戻す
 ARM_TRAVEL_TIME = 1.0
-# 開始位置までの距離が LOOK_NEAR より近くなったら、穂を上げた姿勢へ移し始める
+# 移動の間、台車をゴミの方へ向ける。開始位置までの距離が LOOK_FAR より近くなったら掃く向きへ切り替え始め、LOOK_NEAR で切り替え終わる
+LOOK_FAR = 0.4
 LOOK_NEAR = 0.15
-# 台車が進む向きと、台車の前の向きの差の上限 (front カメラの水平の画角の半分)。差がこれを MOTION_TURN_MARGIN
-# 超えたら、その場で向きを変える (並進を止める)。目的地までが MOTION_FREE_DIST 未満なら制約しない (最後の位置合わせ)
-MOTION_HALF_ANGLE = sweep_floor.FRONT_HALF_FOV
-MOTION_TURN_MARGIN = math.radians(10)
-MOTION_FREE_DIST = 0.03
-# 開始位置へ前に進んで入るための、掃く向きに測った手前の経由点までの距離 (m)
-APPROACH = 0.2
+# 押した後に、掃いた跡に沿って下がる距離の範囲 (m) と速さ (m/s)。下がる間に、残りのゴミの方へ向きを変える。
+# 距離は、残りのゴミの重心から、次の開始位置の手前の点 (APPROACH) と同じだけ離れるまで (回り込みで外へ出ないため)
+RETREAT_MIN = 0.15
+RETREAT_MAX = 0.6
+RETREAT_SPEED = 0.2
+# ゴミのまわりを回り込むときの経由点の角度の間隔
+ORBIT_STEP = math.radians(15)
+# 開始位置へは、掃く向きの APPROACH (m) 手前を経由し、そこから前へ進んで入る (後退して入らない)
+APPROACH = 0.15
+# 状態機械の段階 (状態の記録では、この並びの番号で残す)
+PHASES = ("init", "plan", "travel", "lower", "push", "raise", "retreat", "idle")
 
 
 def forward_of(theta: float) -> np.ndarray:
@@ -253,7 +263,28 @@ def _segment_distance(a: np.ndarray, b: np.ndarray, points: np.ndarray) -> np.nd
     return np.linalg.norm(points - (a + s[:, None] * ab), axis=-1)
 
 
-def plan_route(start: np.ndarray, goal: np.ndarray, obstacles: np.ndarray, clearance: float, ring_points: int = 24) -> list[np.ndarray]:
+def orbit_route(start: np.ndarray, goal: np.ndarray, center: np.ndarray, obstacles: np.ndarray, clearance: float) -> list[np.ndarray] | None:
+    """center のまわりを回り込んで start から goal へ行く経由点の列 (最後が goal)。半径は start から goal の半径へ
+    一定の割合で変える (center を向いたまま進めば、台車から見て横か、半径が縮むなら前へ進む)。
+    obstacles から clearance 以内を通るなら None。start のすぐ近くの obstacles は、最初の区間では無視する"""
+    r0, r1 = np.linalg.norm(start - center), np.linalg.norm(goal - center)
+    a0 = math.atan2(*(start - center)[::-1])
+    da = wrap(math.atan2(*(goal - center)[::-1]) - a0)
+    n = max(1, math.ceil(abs(da) / ORBIT_STEP))
+    points = [center + (r0 + (r1 - r0) * k / n) * np.array([math.cos(a0 + da * k / n), math.sin(a0 + da * k / n)]) for k in range(1, n + 1)]
+    points[-1] = goal
+    near_start = np.linalg.norm(obstacles - start, axis=-1) < clearance
+    prev = start
+    for k, p in enumerate(points):
+        obs = obstacles[~near_start] if k == 0 else obstacles
+        if len(obs) and _segment_distance(prev, p, obs).min() < clearance:
+            return None
+        prev = p
+    return points
+
+
+def plan_route(start: np.ndarray, goal: np.ndarray, obstacles: np.ndarray, clearance: float, ring_points: int = 24,
+               min_radius: float = 0.0) -> list[np.ndarray]:
     """台車の中心を start から goal へ動かす経由点の列 (最後が goal)。obstacles から clearance 以内を通らない
 
     まっすぐ行けなければ、obstacles を囲む円の上の点を経由する最短の経路を選ぶ。start のすぐ近くにある
@@ -268,7 +299,7 @@ def plan_route(start: np.ndarray, goal: np.ndarray, obstacles: np.ndarray, clear
     if len(obstacles) == 0 or clear(start, goal, True):
         return [goal]
     center = obstacles.mean(axis=0)
-    radius = np.linalg.norm(obstacles - center, axis=-1).max() + clearance * 1.3
+    radius = max(np.linalg.norm(obstacles - center, axis=-1).max() + clearance * 1.3, min_radius)
     angles = np.linspace(0, 2 * math.pi, ring_points, endpoint=False)
     nodes = [start, goal] + [center + radius * np.array([math.cos(a), math.sin(a)]) for a in angles]
     dist = {0: 0.0}
@@ -298,7 +329,7 @@ def plan_route(start: np.ndarray, goal: np.ndarray, obstacles: np.ndarray, clear
 class SweepPlanner:
     """掃きを繰り返す状態機械。act を 1 フレーム (dt 秒) ごとに呼ぶ
 
-    状態: init (アームを移動の姿勢へ) -> plan -> travel (台車を開始位置へ) -> lower -> push -> raise -> plan ...
+    状態: init (アームを移動の姿勢へ) -> plan -> travel (台車を開始位置へ) -> lower -> push -> raise -> retreat -> plan ...
     押し終わっていないゴミがなくなったら idle (止まって、ときどき計画し直す)。
     """
 
@@ -316,6 +347,7 @@ class SweepPlanner:
         self.arm_from: np.ndarray | None = None
         self.arm_t = 0.0  # アームの経路 (_arm_at) の上の位置 (s)。0 が移動の姿勢
         self.vel = np.zeros(3)  # 前のフレームの台車の速度の指令 (ワールド座標系の x, y と theta)
+        self.retreat_goal: np.ndarray | None = None
 
     def _tip(self, state: SweepState) -> np.ndarray:
         """押し当てた姿勢の穂先の、env の座標系での位置"""
@@ -340,31 +372,48 @@ class SweepPlanner:
         return self.vel
 
     def _goto(self, state: SweepState, goal: np.ndarray, theta: float, speed: float) -> tuple[np.ndarray, float, float]:
-        """台車を goal と theta へ向かわせる速度 (比例制御)。位置と向きの残りの誤差も返す。
-        進む向きが台車の前から MOTION_HALF_ANGLE を超えてずれていれば、並進を弱め、その場で向きを変える"""
+        """台車を goal と theta へ向かわせる速度 (比例制御)。位置と向きの残りの誤差も返す"""
         err = goal - state.base
         err_theta = wrap(theta - state.theta)
-        dist = np.linalg.norm(err)
-        if dist >= MOTION_FREE_DIST:
-            off = abs(wrap(heading_of(err) - state.theta))
-            speed *= min(max((MOTION_HALF_ANGLE + MOTION_TURN_MARGIN - off) / MOTION_TURN_MARGIN, 0.0), 1.0)
         # 止まれる速さ (加速度の上限で減速しきれる速さ) を超えない
+        dist = np.linalg.norm(err)
         stop_speed = math.sqrt(2 * LINEAR_ACCEL * 0.8 * dist)
         cmd = np.array([*(err * 3.0), err_theta * 3.0])
         return self._limit(cmd, min(speed, stop_speed + 0.02)), dist, abs(err_theta)
 
     def _travel_theta(self, state: SweepState) -> float:
-        """移動の間の台車の向き。経由点へ向かう間は押し終わっていないゴミの重心の方、開始位置へ向かう最後の区間は
-        掃く向き。ただし、進む向き (次の経由点の方) が front カメラの画角に入る範囲に収める"""
+        """移動の間の台車の向き。開始位置から遠いうちは、押し終わっていないゴミの重心の方を向く"""
         pending = ~in_target(state.debris, state.target, self.params.done_margin)
-        want = self.goal_theta
-        if len(self.route) > 1 and pending.any():
-            want = heading_of(state.debris[pending].mean(axis=0) - state.base)
-        err = self.route[0] - state.base
-        if np.linalg.norm(err) < MOTION_FREE_DIST:
-            return want
-        motion = heading_of(err)
-        return motion + float(np.clip(wrap(want - motion), -MOTION_HALF_ANGLE, MOTION_HALF_ANGLE))
+        if not pending.any():
+            return self.goal_theta
+        look = heading_of(state.debris[pending].mean(axis=0) - state.base)
+        dist = np.linalg.norm(self.route[-1] - state.base)
+        w = min(max((dist - LOOK_NEAR) / (LOOK_FAR - LOOK_NEAR), 0.0), 1.0)
+        return self.goal_theta + w * wrap(look - self.goal_theta)
+
+    def _look_theta(self, state: SweepState) -> float | None:
+        """押し終わっていないゴミの重心の方を向く台車の向き (なければ None)"""
+        pending = ~in_target(state.debris, state.target, self.params.done_margin)
+        if not pending.any():
+            return None
+        return heading_of(state.debris[pending].mean(axis=0) - state.base)
+
+    def _retreat_goal(self, state: SweepState) -> np.ndarray:
+        """押した後に下がる先。掃いた跡 (今の掃く向きの逆) に沿って、残りのゴミの重心から、次の掃きの開始位置の
+        APPROACH 手前の点と同じだけ離れるまで (RETREAT_MIN から RETREAT_MAX)"""
+        back = -self.current.direction
+        nxt = choose_pass(state, self.poses.tip, self.params)
+        if nxt is None:
+            return state.base + RETREAT_MIN * back
+        pending = ~in_target(state.debris, state.target, self.params.done_margin)
+        center = state.debris[pending].mean(axis=0)
+        theta = heading_of(nxt.direction)
+        approach = self._base_for_tip(nxt.tip_at(state.target, nxt.start), theta) - APPROACH * nxt.direction
+        want = np.linalg.norm(approach - center)
+        for d in np.arange(RETREAT_MIN, RETREAT_MAX + 1e-6, 0.05):
+            if np.linalg.norm(state.base + d * back - center) >= want:
+                return state.base + d * back
+        return state.base + RETREAT_MAX * back
 
     def _arm_at(self, t: float) -> np.ndarray:
         """移動の姿勢 (t=0) から、穂を上げた姿勢 (t=ARM_TRAVEL_TIME) を経て、押し当てた姿勢
@@ -406,14 +455,15 @@ class SweepPlanner:
                     self.goal_theta = heading_of(p.direction)
                     goal = self._base_for_tip(p.tip_at(state.target, p.start), self.goal_theta)
                     clearance = BASE_RADIUS + DEBRIS_HALF + self.params.base_clearance
-                    # 開始位置が前に見えていなければ (進む向きが掃く向きから MOTION_HALF_ANGLE を超えてずれる)、
-                    # 掃く向きの APPROACH 手前を経由し、そこから前へ進んで入る
-                    if (np.linalg.norm(goal - state.base) > APPROACH / 2
-                            and abs(wrap(heading_of(goal - state.base) - self.goal_theta)) > MOTION_HALF_ANGLE):
-                        approach = goal - APPROACH * p.direction
-                        self.route = plan_route(state.base, approach, state.debris, clearance) + [goal]
-                    else:
-                        self.route = plan_route(state.base, goal, state.debris, clearance)
+                    # 掃く向きの APPROACH 手前を経由する。回り込む円は、その点より外側にとる (円から内向きに進んで入る)
+                    approach = goal - APPROACH * p.direction
+                    pending = ~in_target(state.debris, state.target, self.params.done_margin)
+                    center = state.debris[pending].mean(axis=0)
+                    route = orbit_route(state.base, approach, center, state.debris, clearance)
+                    if route is None:
+                        ring = np.linalg.norm(approach - state.debris.mean(axis=0)) + 0.05
+                        route = plan_route(state.base, approach, state.debris, clearance, min_radius=ring)
+                    self.route = route + [goal]
                     self._start_phase("travel")
         elif self.phase == "travel":
             final = len(self.route) == 1
@@ -447,6 +497,14 @@ class SweepPlanner:
             arm = self._arm_at(self.arm_t)
             vel = self._limit(np.zeros(3), 0.0)
             if self.arm_t <= ARM_TRAVEL_TIME:
+                self.retreat_goal = self._retreat_goal(state)
+                self._start_phase("retreat")
+        elif self.phase == "retreat":
+            # 掃いた跡に沿って下がりながら、残りのゴミの方へ向きを変える
+            look = self._look_theta(state)
+            theta = state.theta if look is None else look
+            vel, dist, err_theta = self._goto(state, self.retreat_goal, theta, RETREAT_SPEED)
+            if (dist < 0.02 and err_theta < 0.1) or self.timer > 4.0:
                 self._start_phase("plan")
 
         return np.concatenate([arm, [contract.GRIPPER_HOLD_RAD], vel])
