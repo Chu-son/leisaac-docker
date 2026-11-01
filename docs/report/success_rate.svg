@@ -85,5 +85,5 @@
 <text x='66' y='36' font-size='11' fill='#52514e'>採用した変更</text>
 <rect x='182' y='27' width='10' height='10' rx='2' fill='#eb6834'/>
 <text x='196' y='36' font-size='11' fill='#52514e'>採らなかった変更</text>
-<text x='52' y='324' font-size='11' fill='#898781'>実験の番号（docs/sweep_experiments.md）。8 までは制限時間 25 秒、8' 以降は 40 秒</text>
+<text x='52' y='324' font-size='11' fill='#898781'>実験の番号（本文の表）。8 までは制限時間 25 秒、8' 以降は 40 秒</text>
 </svg>

@@ -64,7 +64,7 @@ for j, (label, color) in enumerate((("採用した変更", ADOPTED), ("採らな
     lx = L + j * 130
     out.append(f"<rect x='{lx}' y='27' width='10' height='10' rx='2' fill='{color}'/>")
     out.append(f"<text x='{lx + 14}' y='36' font-size='11' fill='{INK2}'>{label}</text>")
-out.append(f"<text x='{L}' y='{H - 6}' font-size='11' fill='{MUTED}'>実験の番号（docs/sweep_experiments.md）。8 までは制限時間 25 秒、8' 以降は 40 秒</text>")
+out.append(f"<text x='{L}' y='{H - 6}' font-size='11' fill='{MUTED}'>実験の番号（本文の表）。8 までは制限時間 25 秒、8' 以降は 40 秒</text>")
 out.append("</svg>")
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "success_rate.svg"), "w") as f:
     f.write("\n".join(out) + "\n")
