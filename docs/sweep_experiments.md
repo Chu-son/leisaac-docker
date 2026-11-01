@@ -51,9 +51,14 @@ P6 以降の、学習したポリシーの実験を、試した順に記録し�
 ### 成果物（git に含めない）
 
 - 動画: 実験 4 以降の評価は `data/sweep/eval/<日時>/videos/round_<番号>_<success|failure>.mp4` と `overview.png`。
-- 学習済みのポリシー: `data/train/<名前>/`（`sweep_floor-act`、`sweep_floor200-act`、`sweep_floor200-smolvla`、`sweep_floor200_dagger1-act`、`sweep_look200-act`、`sweep_look200_dagger1-act`、`sweep_cam200-act`）。
-- データ: `data/datasets/`（HDF5）と `data/lerobot/`（LeRobot 形式）。
+- 学習済みのポリシー: `data/train/<名前>/`（`sweep_floor-act`、`sweep_floor200-act`、`sweep_floor200-smolvla`、`sweep_floor200_dagger1-act`、`sweep_look200-act`、`sweep_look200_dagger1-act`、`sweep_cam200-act`、`sweep_fwd200-act`、`sweep_orbit200-act`）。
+- データ: `data/lerobot/`（LeRobot 形式、全実験分）と `data/datasets/`（HDF5。最新の `sweep_orbit200` だけを残す）。
+- 紹介用の動画: 実験 10 の `data/sweep/eval/20261101-132314/render/`。
 - 測定だけに使った出力（SmolVLA の VRAM の測定、動作確認の学習、DAgger のテスト用データ）は、作り直せるので削除した（2026-10-31）。
+- 整理（2026-11-02）:
+  - 実験の記録から参照していない評価（動作確認、途中版の計画器の 9 件）を削除した。
+  - 実験 10 以外の学習の出力は、`last` の重みだけを残した。途中のチェックポイントと `training_state` は削除した。
+  - 実験 10 以外の HDF5 は、ユーザーが手作業で消す。
 
 ## 経緯（試した順）
 

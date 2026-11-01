@@ -29,6 +29,20 @@ LeKiwi（台車 + SO101 アーム）に手箒を持たせ、床のゴミを目�
 - 計画器は、sim の真値（ゴミの位置、目標領域の位置、台車の姿勢、関節の角度）を読んで動く。成功と失敗の判定も真値で行い、成功したエピソードだけを残す。
 - 学習するポリシーが見るのは、カメラ画像と自分の関節・台車の状態だけ。
 
+### 最新のパイプラインの成果物（2026-11-02 時点、実験 10。docs/sweep_experiments.md）
+
+| 段階 | コマンド | パス |
+|---|---|---|
+| 生成（計画器 ④、200 エピソード） | `make datagen DATASET=sweep_orbit200 NUM=200` | `data/datasets/sweep_orbit200.{hdf5,sim.env,datagen}` |
+| 変換 | `make convert DATASET=sweep_orbit200` | `data/lerobot/sweep_orbit200/` |
+| 学習（ACT） | `make train DATASET=sweep_orbit200 TRAIN_POLICY=act` | `data/train/sweep_orbit200-act/`（評価に使ったのは `last` = 100000） |
+| 計画器の確認 | `make sweep-eval EVAL_ROUNDS=30 EVAL_SEED=1793361616` | `data/sweep/eval/20261101-100014/`（30/30） |
+| 評価 | `make sweep-eval EVAL_POLICY=remote TRAIN_NAME=sweep_orbit200-act EVAL_ROUNDS=30 EVAL_SEED=1793361616` | `data/sweep/eval/20261101-132314/`（28/30） |
+| 紹介用の動画 | `make sweep-render EVAL_RUN=20261101-132314 RENDER_TITLE="ACT (exp 10)"` | `data/sweep/eval/20261101-132314/render/` |
+
+- 採用しなかった実験の学習の出力は、`checkpoints/last/pretrained_model`（評価に使った重み）と `sweep_train.json` だけを残した。学習の再開や、途中のチェックポイントでの評価（実験 2 の 60,000 step など）はできない。
+- 採用しなかった実験の HDF5 は、ユーザーが手作業で消す（`sweep_orbit200` 以外）。LeRobot 形式（`data/lerobot/`）は残すので、再学習はできる。再生（`sweep-replay`）と変換のやり直しはできなくなる。
+
 ## データの約束事（`tools/leisaac_ext/contract.py`）
 
 sim、変換、学習、推論のすべてが、このファイルの定義に従う。isaaclab も lerobot も import しないので、sim と train の両方で読み込める。

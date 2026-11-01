@@ -126,10 +126,29 @@ tools/
   check.sh            # make check の本体
 notebooks/
   train_colab.ipynb   # Colab で学習する（GitHub から clone し、同じ lock から環境を作って sweep_train.py を実行する）
-data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外）
+data/                 # データセット、ポリシー、キャリブレーション、check のログ（git 管理外。下の表）
 assets/               # USD アセット（git 管理外）
 docs/
 ```
+
+### data/ の中身
+
+「消してよいか」は、作り直せるか（コマンドを流し直せばできるか）で決めます。`datasets/` と `policies/` はユーザーのデータなので、ツールからは消しません。
+
+| ディレクトリ | 作るコマンド | 中身 | 消してよいか |
+|---|---|---|---|
+| `datasets/` | `teleop` / `datagen` / `dagger` | 記録（`<名前>.hdf5`）、記録時の設定（`.sim.env`）、ラウンドごとのログ（`.datagen/`） | ユーザーのデータ。手作業でのみ消す |
+| `lerobot/<名前>/` | `convert` | LeRobot 形式のデータセット（学習の入力） | HDF5 が残っていれば作り直せる。HDF5 を消した後は、これが唯一の学習データ |
+| `train/<名前>/` | `train` / `import-policy` | 学習の出力（`checkpoints/<step>/`、`last`、`sweep_train.json`） | 評価に使わないチェックポイントと `training_state`（学習の再開用）は消してよい |
+| `sweep/eval/<日時>/` | `sweep-eval` | 評価の結果（`summary.json`、`rounds.jsonl`）、動画、状態の記録（`states/`）、`render/` | 実験の記録から参照しているものは残す |
+| `sweep/check/`、`sweep/camera_probe/`、`sweep/inspect/` | `sweep-check` / `sweep-camera-probe` / `sweep-inspect` | 確認用の画像と動画 | 消してよい（作り直せる） |
+| `check/<日時>/` | `check` | check のログ | 消してよい（直近のものだけ残せばよい） |
+| `colab/` | `colab-data` | Colab に渡す tar | Drive に上げた後は消してよい |
+| `policies/` | `assets` | 取得した学習済みポリシー（GR00T） | ユーザーのデータ。`make assets` で取り直せる |
+| `calibration/` | `teleop`（Leader） | Leader アームのキャリブレーション | 消さない |
+| `.cache/` | 学習、推論 | Hub と torchvision から取得したモデルの重み（約 8GB） | 消すと次回に取り直す |
+
+Sweep タスクの最新のパイプラインが使っているディレクトリは、[docs/sweep.md](docs/sweep.md) の「最新のパイプラインの成果物」にあります。
 
 ## ドキュメント
 
