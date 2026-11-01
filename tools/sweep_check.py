@@ -161,9 +161,13 @@ for r in range(args.resets):
     for _ in range(30):
         obs, *_ = env.step(hold)
     # 静止した場面なので、リセット直後の画像は 0.5 秒後の画像に近い (古い場面のままなら、リセット前の画像に近くなる)。
-    # 1 回の描画ではノイズ除去が収束しきらないので、完全には一致しない
+    # front カメラは床が大半を写し、リセットの前後で変わるのはゴミと目標領域の 1% 前後の画素だけなので、
+    # 画像全体ではなく、リセット前から大きく (いずれかの色が 40 以上) 変わった画素の中で、リセット直後の画像が
+    # まだ違っている割合を見る (古い場面のままなら 1 に近い)。1 回の描画ではノイズ除去が収束しきらないので 0 にはならない
     settled = obs["policy"]["front"][0].float()
-    fresh, old_scene = (settled - first).abs().mean().item(), (settled - before).abs().mean().item()
+    changed = (settled - before).abs().amax(dim=-1) > 40
+    stale = ((settled - first).abs().amax(dim=-1) > 40)[changed].float().mean().item() if changed.any() else 1.0
+    changed_pct = changed.float().mean().item() * 100
     speed = max(env.scene[n].data.root_lin_vel_w[0].norm().item() for n in names)
     moved = (torch.stack([env.scene[n].data.root_pos_w[0] for n in names]) - pos).norm(dim=-1).max().item()
     count = sweep_mdp.debris_in_target(env)[0].sum().item()
@@ -172,12 +176,12 @@ for r in range(args.resets):
     corners = torch.tensor([[a, b] for a in (-1, 1) for b in (-1, 1)], device=dev) * sweep_mdp.TARGET_HALF
     pts = torch.cat([pos[:, :2], env.scene[sweep_mdp.TARGET_NAME].data.root_pos_w[0, :2] + corners]) - cam_xy
     view = torch.atan2(pts[:, 0].abs(), pts[:, 1]).max().item()
-    check(gap.min().item() > 0.035 and count == 0 and moved < 0.005 and fresh < 0.5 * old_scene
+    check(gap.min().item() > 0.035 and count == 0 and moved < 0.005 and changed_pct > 0.1 and stale < 0.5
           and view < sweep_floor.FRONT_HALF_FOV,
           f"reset {r}: 最も近いゴミの間隔 {gap.min().item() * 100:.1f}cm, 目標領域の中 {count} 個, "
           f"front から見た最大の方位 {np.degrees(view):.1f}° (半画角 {np.degrees(sweep_floor.FRONT_HALF_FOV):.1f}°), "
           f"0.5 秒後の移動 {moved * 1000:.1f}mm, 速さ {speed:.3f}m/s, "
-          f"0.5 秒後の画像との差 {fresh:.1f} (リセット前の画像との差 {old_scene:.1f})")
+          f"リセット前から変わった画素 {changed_pct:.1f}% のうち、リセット直後にまだ違う割合 {stale:.2f}")
 
 print(f"  リセット 1 回 {reset_time / max(args.resets, 1):.2f}s", flush=True)
 
