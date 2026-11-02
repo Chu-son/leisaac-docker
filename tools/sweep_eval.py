@@ -12,6 +12,8 @@
 front カメラの水平の画角に入っていたフレームの割合 (ゴミを見失わずに動けているかの目安)。
 状態の記録 (leisaac_ext.sweep_log) も常に残す: run.json (構成)、env_cfg.yaml、states/round_<番号>.npz (ラウンドの初めの
 状態とランダム化の値、30fps のフレームごとの状態と action)。sweep_replay.py --eval_dir で再生でき、動画も作り直せる。
+--disturb push,spill は、ラウンドごとに外乱を 1 種類加える (ラウンドの番号で順に割り当てる。leisaac_ext.disturb)。
+--layout は配置の型 (sweep_floor.LAYOUTS。scatter はゴミを広く散らす)。どちらも評価用で、--record とは使えない。
 --videos を付けると、ラウンドごとの動画 (videos/round_<番号>_<success|failure>.mp4。front、wrist、上から見た図を
 並べた 30fps の実時間) と、全ラウンドの終わりの図を並べた overview.png も残す (leisaac_ext.sweep_video)。
 --record を付けると、成功したエピソードだけを HDF5 に記録する (isaaclab の RecorderManager。上流の teleop と同じ形式)。
@@ -35,6 +37,8 @@ parser.add_argument("--policy_timeout_ms", type=int, default=15000)
 parser.add_argument("--action_horizon", type=int, default=16, help="1 回の推論で実行する action の数 (--policy remote)")
 parser.add_argument("--rounds", type=int, default=None, help="ラウンド数 (既定は 10。--record では上限で、既定は num_demos の 2 倍 + 10)")
 parser.add_argument("--seed", type=int, default=None, help="乱数のシード (省略時は現在時刻)")
+parser.add_argument("--disturb", default=None, help="外乱の種類 (カンマ区切り。push, spill。ラウンドの番号で順に割り当てる)")
+parser.add_argument("--layout", default="default", help="配置の型 (sweep_floor.LAYOUTS)")
 parser.add_argument("--randomize", default=None, help="追加のランダム化の項目 (カンマ区切り。all ですべて。省略時はタスクの既定)")
 parser.add_argument("--out_dir", default=None,
                     help="結果の保存先 (省略時は /workspace/data/sweep/eval/<日時>。--record では <dataset_file から .hdf5 を除いたもの>.datagen)")
@@ -63,7 +67,7 @@ from isaaclab.managers import DatasetExportMode, RecorderTerm
 from isaaclab_tasks.utils import parse_env_cfg
 
 import leisaac  # noqa: F401
-from leisaac_ext import contract, remote, sweep_floor, sweep_log, sweep_mdp, sweep_planner, sweep_video
+from leisaac_ext import broom, contract, disturb, remote, sweep_floor, sweep_log, sweep_mdp, sweep_planner, sweep_video
 
 
 class PlannerPolicy:
@@ -146,6 +150,10 @@ def pending_in_view(state: sweep_planner.SweepState) -> bool | None:
 seed = args.seed if args.seed is not None else int(time.time())
 if args.dagger:
     assert args.policy == "remote" and args.record, "--dagger は --policy remote と --record と一緒に使う"
+disturb_kinds = [k for k in (args.disturb or "").split(",") if k]
+assert not set(disturb_kinds) - set(disturb.KINDS), f"--disturb は {disturb.KINDS} から選ぶ"
+assert args.layout in sweep_floor.LAYOUTS, f"--layout は {sorted(sweep_floor.LAYOUTS)} から選ぶ"
+assert not (args.record and (disturb_kinds or args.layout != "default")), "--disturb と --layout は --record と一緒に使えない"
 if args.record:
     assert args.dataset_file and args.dataset_file.endswith(".hdf5"), "--record には --dataset_file (.hdf5) が要る"
     # isaaclab の HDF5 の書き出しは、既存のファイルを上書きする
@@ -174,6 +182,7 @@ else:
 cfg.seed = seed
 if args.time_limit is not None:
     cfg.episode_length_s = args.time_limit
+cfg.events.reset_layout.params.update(sweep_floor.LAYOUTS[args.layout])
 if args.randomize is not None:
     names = sweep_floor.ALL_RANDOMIZATION if args.randomize == "all" else [n for n in args.randomize.split(",") if n]
     cfg.set_randomization(names)
@@ -205,6 +214,8 @@ sweep_log.write_run(out_dir, env, {"task": args.task, "seed": seed, "args": vars
                                    "task_constants": {"target_half": sweep_mdp.TARGET_HALF, "success_count": sweep_mdp.SUCCESS_COUNT,
                                                       "in_target_max_z": sweep_mdp.IN_TARGET_MAX_Z}})
 round_log = sweep_log.RoundLog(env)
+disturb_ctx = disturb.Context(env, sweep_mdp.DEBRIS_NAMES, sweep_mdp.TARGET_NAME, sweep_mdp.TARGET_HALF,
+                              sweep_floor.FRONT_CAMERA_XY, sweep_floor.FRONT_HALF_FOV, broom.HEAD_CENTER)
 rng = np.random.default_rng(seed)
 # 2 ラウンド目からは、前のラウンドの終わりの自動リセットが返した観測から始める。env.reset() を重ねると、
 # 記録中のエピソード (初期状態だけ) が、前のラウンドの success の値 (リセットでは消えない) で書き出される
@@ -236,6 +247,10 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         base_min_dist = math.inf
         # 押し終わっていないゴミが front カメラの画角に入っていたフレームの数と、押し終わっていないゴミがあったフレームの数
         view_frames, pending_frames = 0, 0
+        # 使った配置の違反の値 (0 なら配置の条件をすべて満たす。sweep_mdp.reset_layout)
+        layout_violation = round(float(getattr(env, "sweep_layout_violation", 0.0)), 4)
+        dist = disturb.RoundDisturbance(disturb_kinds[r % len(disturb_kinds)], seed, r, contract.FPS) if disturb_kinds else None
+        disturb_ctx.begin_round()
         round_log.begin()
         if args.videos:
             video = sweep_video.VideoWriter(f"{out_dir}/videos/round_{r:03d}.mp4")
@@ -254,6 +269,9 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     env.expert_action = expert_action
                     if use_expert:
                         sim_action = expert_action
+                if dist:
+                    # フレームの境目 (記録と step の前) で外乱を加える
+                    dist.step(steps // contract.SIM_STEPS_PER_FRAME, disturb_ctx)
                 for sub in range(contract.SIM_STEPS_PER_FRAME):
                     # step の後は自動でリセットされるので、終わる前の個数を残しておく
                     inside = sweep_mdp.debris_in_target(env)[0]
@@ -291,10 +309,13 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
             os.rename(video.path, f"{out_dir}/videos/round_{r:03d}_{'success' if success else 'failure'}.mp4")
             # 最後に描いたフレームの状態に、ラウンドの結果を書き添える (自動リセットの後は、終わりの状態を読めない)
             maps.append(sweep_video.draw_map(*last, f"#{r} {'S' if success else 'F'} {steps * env.step_dt:.1f}s in={count}"))
+        disturb_info = dist.info if dist else {}
         round_log.save(f"{out_dir}/states/round_{r:03d}.npz",
-                       {"round": r, "success": success, "in_target": count, "steps": steps, "seed": seed})
+                       {"round": r, "success": success, "in_target": count, "steps": steps, "seed": seed,
+                        "layout": args.layout, "layout_violation": layout_violation, **disturb_info})
         result = {"round": r, "success": success, "in_target": count, "sim_time": round(steps * env.step_dt, 2),
                   "base_min_dist": round(base_min_dist, 3), "view_fraction": round(view_frames / max(pending_frames, 1), 3),
+                  "layout_violation": layout_violation, **disturb_info,
                   "states": f"states/round_{r:03d}.npz", "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
         if args.dagger:
@@ -312,7 +333,9 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         log.write(json.dumps(result) + "\n")
         log.flush()
         print(f"round {r}: {'success' if success else 'failure'} in_target={count} sim_time={result['sim_time']}s "
-              f"base_min_dist={result['base_min_dist']:.3f}m view={result['view_fraction']:.2f} " + " ".join(f"{k}={v}" for k, v in policy.info().items()) + f" ({n_ok}/{len(results)})", flush=True)
+              f"base_min_dist={result['base_min_dist']:.3f}m view={result['view_fraction']:.2f} " + " ".join(f"{k}={v}" for k, v in policy.info().items())
+              + (f" disturb={dist.kind}{'' if dist.info['disturb_applied'] else '(not applied)'}" if dist else "")
+              + f" ({n_ok}/{len(results)})", flush=True)
 
 n, n_ok = len(results), sum(x["success"] for x in results)
 # 成功率の 95% 信頼区間 (Wilson)
@@ -327,7 +350,13 @@ summary = {"task": args.task, "policy": args.policy, "seed": seed, "rounds": n, 
            "base_contact_rounds": sum(x["base_min_dist"] < sweep_planner.BASE_RADIUS for x in results),
            # 押し終わっていないゴミが front カメラの画角に入っていたフレームの割合 (ラウンドの平均)
            "mean_view_fraction": round(float(np.mean([x["view_fraction"] for x in results])), 3) if n else None,
-           "time_limit": cfg.episode_length_s, "wall_time": round(time.time() - start, 1), "device": args.device}
+           "time_limit": cfg.episode_length_s, "wall_time": round(time.time() - start, 1), "device": args.device,
+           "layout": args.layout, "layout_violation_rounds": sum(x["layout_violation"] > 0 for x in results),
+           "disturb": disturb_kinds}
+for kind in disturb_kinds:
+    rows = [x for x in results if x["disturb"] == kind]
+    # 種類ごとの [成功, ラウンド, 外乱が起きたラウンド]
+    summary[f"disturb_{kind}"] = [sum(x["success"] for x in rows), len(rows), sum(x["disturb_applied"] for x in rows)]
 if args.policy == "remote":
     # ping は、ここまでの推論サーバの VRAM のピークも返す
     summary.update(action_horizon=args.action_horizon, server=policy.client.call("ping")[0])

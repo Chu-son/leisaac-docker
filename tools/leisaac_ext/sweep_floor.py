@@ -41,6 +41,13 @@ LIGHT_INTENSITY = 1000.0
 CLUSTER_RANGE = {"x": (-0.4, 0.4), "y": (0.9, 1.5)}
 TARGET_RANGE = {"x": (-0.9, 0.9), "y": (0.5, 2.2)}
 TARGET_DISTANCE = (0.45, 0.7)  # ゴミのまとまりの中心から目標領域の中心まで
+# 配置の型 (sweep_eval.py --layout)。reset_layout の引数を上書きする。default は学習データと同じ配置 (4x3 の格子、間隔 8cm)。
+# scatter はゴミを広く散らす評価用 (5x4 の格子、間隔 11cm)。広げた分、ゴミが目標領域の中や穂の下に置かれないように、
+# 目標領域の縁から 5cm 以上外、y 0.75m 以上 (default の配置の y の最小値の目安) を条件に足す
+LAYOUTS = {
+    "default": {},
+    "scatter": {"grid": (5, 4), "pitch": 0.11, "target_clearance": 0.05, "min_debris_y": 0.75},
+}
 
 CAMERA_WIDTH, CAMERA_HEIGHT = contract.IMAGE_SHAPE[1], contract.IMAGE_SHAPE[0]
 

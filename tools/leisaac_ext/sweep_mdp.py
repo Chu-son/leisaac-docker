@@ -43,6 +43,8 @@ def reset_layout(
     pitch: float = 0.08,
     jitter: float = 0.015,
     num_candidates: int = 256,
+    target_clearance: float | None = None,
+    min_debris_y: float | None = None,
 ):
     """ゴミのまとまりと目標領域を、ランダムな位置に置く (mode="reset")
 
@@ -51,6 +53,9 @@ def reset_layout(
     目標領域の中心は target_range の中で、まとまりの中心から target_distance の距離に置く。
     さらに、ゴミすべてと目標領域の四隅が、view_origin (front カメラの位置) から見て ±max_bearing 以内に入るようにする
     (最初の画像に両方が写る)。配置の候補をまとめて引き、条件を満たす最初のものを使う (なければ最も条件に近いもの)。
+    target_clearance を与えると、ゴミが目標領域の縁から外へこれ以上離れていることも条件にする。min_debris_y を与えると、
+    ゴミの y がこれ以上であること (ロボットの前、穂より先) も条件にする。既定 (None) では条件に入れず、配置は変わらない。
+    使った配置の違反の値 (0 なら条件をすべて満たす) は env.sweep_layout_violation に残す。
     """
     device, k = env.device, num_candidates
     nx, ny = grid
@@ -74,7 +79,14 @@ def reset_layout(
         lo, hi = target_distance
         bearing = torch.cat([_bearing(debris_xy, view), _bearing(target_xy[:, None] + corners, view)], dim=1)
         violation = (lo - dist).clamp(min=0) + (dist - hi).clamp(min=0) + (bearing.amax(dim=1) - max_bearing).clamp(min=0)
+        if target_clearance is not None:
+            # ゴミから目標領域 (正方形) の縁までの、外への距離 (中にあれば負)
+            edge = ((debris_xy - target_xy[:, None]).abs().amax(dim=-1) - TARGET_HALF).amin(dim=1)
+            violation = violation + (target_clearance - edge).clamp(min=0)
+        if min_debris_y is not None:
+            violation = violation + (min_debris_y - debris_xy[..., 1].amin(dim=1)).clamp(min=0)
         best = violation.argmin()
+        env.sweep_layout_violation = float(violation[best])
 
         origin = env.scene.env_origins[env_id]
         ids = torch.tensor([env_id], device=device)
