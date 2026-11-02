@@ -194,6 +194,28 @@ def _randomization_terms(name: str) -> dict[str, EventTerm]:
                 },
             )
         }
+    if name == "light_wide":
+        # 配置の外の評価用 (学習データには使わない)。light より広い範囲
+        return {
+            "rand_light": EventTerm(
+                func=sweep_mdp.randomize_light,
+                mode="reset",
+                params={
+                    "intensity_range": (0.3 * LIGHT_INTENSITY, 2.0 * LIGHT_INTENSITY),
+                    "tint": 0.25,
+                    "base_color": LIGHT_COLOR,
+                },
+            )
+        }
+    if name == "floor_color":
+        # 配置の外の評価用 (学習データには使わない)。学習データの床は FLOOR_COLOR の 1 色
+        return {
+            "rand_floor_color": EventTerm(
+                func=sweep_mdp.randomize_floor_color,
+                mode="reset",
+                params={"gray_range": (0.25, 0.85), "warmth": 0.15},
+            )
+        }
     if name == "camera":
         pose_range = {"x": (-0.005, 0.005), "y": (-0.005, 0.005), "z": (-0.005, 0.005),
                       "roll": (-0.03, 0.03), "pitch": (-0.03, 0.03), "yaw": (-0.03, 0.03)}  # m, rad
@@ -209,9 +231,12 @@ def _randomization_terms(name: str) -> dict[str, EventTerm]:
 
 
 # 追加のランダム化の項目と、既定で有効にするもの。どれもコストはほぼない (docs/sweep.md)。
-# 質量と摩擦は、記録される状態 (初期状態) に含まれず、replay で再現できなくなるので、既定では使わない
-RANDOMIZATIONS = ("debris_mass", "debris_friction", "debris_color", "light", "camera")
+# 質量と摩擦は、記録される状態 (初期状態) に含まれず、replay で再現できなくなるので、既定では使わない。
+# light_wide と floor_color は配置の外の評価用 (docs/sweep.md の「評価の配置」)。light_wide は light と同じイベントを置き換える
+RANDOMIZATIONS = ("debris_mass", "debris_friction", "debris_color", "light", "camera", "light_wide", "floor_color")
 DEFAULT_RANDOMIZATION = ("debris_color", "light", "camera")
+# --randomize all で有効にするもの (light_wide は light と同時に使えないので除く)
+ALL_RANDOMIZATION = tuple(n for n in RANDOMIZATIONS if n != "light_wide")
 
 
 EPISODE_LENGTH_S = 40.0
@@ -256,6 +281,12 @@ class SweepFloorEnvCfg(LeKiwiTaskEnvCfg):
         unknown = set(names) - set(RANDOMIZATIONS)
         if unknown:
             raise ValueError(f"unknown randomization: {sorted(unknown)} (choose from {RANDOMIZATIONS})")
+        if {"light", "light_wide"} <= set(names):
+            raise ValueError("light と light_wide は同時に使えない (同じ照明を変える)")
+        terms = {}
         for name in RANDOMIZATIONS:
             for key, term in _randomization_terms(name).items():
-                setattr(self.events, key, term if name in names else None)
+                if name in names or key not in terms:
+                    terms[key] = term if name in names else None
+        for key, term in terms.items():
+            setattr(self.events, key, term)

@@ -50,7 +50,7 @@ cfg = parse_env_cfg(args.task, device=args.device, num_envs=1)
 cfg.use_teleop_device("lekiwi-leader")
 cfg.recorders = None
 if args.randomize is not None:
-    names = sweep_floor.RANDOMIZATIONS if args.randomize == "all" else [n for n in args.randomize.split(",") if n]
+    names = sweep_floor.ALL_RANDOMIZATION if args.randomize == "all" else [n for n in args.randomize.split(",") if n]
     cfg.set_randomization(names)
 env = gym.make(args.task, cfg=cfg).unwrapped
 active = sorted(n for n, t in vars(cfg.events).items() if t is not None)

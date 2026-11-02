@@ -165,6 +165,16 @@ def _light_prim(env, env_id: int = 0):
     return env.scene.stage.GetPrimAtPath(f"{env.scene.env_prim_paths[env_id]}/Light")
 
 
+def _floor_shaders(env, env_id: int = 0):
+    """床 (sweep_floor の Floor) の shader。床のないシーンでは空"""
+    from pxr import Usd, UsdShade
+
+    root = env.scene.stage.GetPrimAtPath(f"{env.scene.env_prim_paths[env_id]}/Floor")
+    if not root.IsValid():
+        return []
+    return [UsdShade.Shader(p) for p in Usd.PrimRange(root) if p.IsA(UsdShade.Shader)]
+
+
 def _shaders(env, name: str, env_id: int = 0):
     from pxr import Usd, UsdShade
 
@@ -186,6 +196,9 @@ def capture_setup(env, env_id: int = 0) -> dict[str, np.ndarray]:
     light = _light_prim(env, env_id)
     out["setup/light/intensity"] = np.array(light.GetAttribute("inputs:intensity").Get(), np.float32)
     out["setup/light/color"] = np.array(light.GetAttribute("inputs:color").Get(), np.float32)
+    floor = _floor_shaders(env, env_id)
+    if floor:
+        out["setup/floor/color"] = np.array(floor[0].GetInput("diffuseColor").Get(), np.float32)
     names = _debris_names(env)
     out["setup/debris/color"] = np.array([_shaders(env, n, env_id)[0].GetInput("diffuseColor").Get() for n in names], np.float32)
     out["setup/debris/mass"] = np.stack([_np(env.scene[n].root_physx_view.get_masses())[env_id] for n in names])
@@ -209,6 +222,9 @@ def apply_setup(env, arrays: dict, env_id: int = 0) -> None:
     light = _light_prim(env, env_id)
     light.GetAttribute("inputs:intensity").Set(float(arrays["setup/light/intensity"]))
     light.GetAttribute("inputs:color").Set(Gf.Vec3f(*arrays["setup/light/color"].tolist()))
+    if "setup/floor/color" in arrays:  # 2026-11-02 より前の記録にはない (床は既定の色)
+        for shader in _floor_shaders(env, env_id):
+            shader.GetInput("diffuseColor").Set(Gf.Vec3f(*arrays["setup/floor/color"].tolist()))
     cpu_ids = torch.tensor([env_id])
     for i, name in enumerate(_debris_names(env)):
         for shader in _shaders(env, name, env_id):

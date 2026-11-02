@@ -175,7 +175,7 @@ cfg.seed = seed
 if args.time_limit is not None:
     cfg.episode_length_s = args.time_limit
 if args.randomize is not None:
-    names = sweep_floor.RANDOMIZATIONS if args.randomize == "all" else [n for n in args.randomize.split(",") if n]
+    names = sweep_floor.ALL_RANDOMIZATION if args.randomize == "all" else [n for n in args.randomize.split(",") if n]
     cfg.set_randomization(names)
 env = gym.make(args.task, cfg=cfg).unwrapped
 # 計画器の IK (calibrate_arm) は関節の状態を書き換える。その後の reset で元に戻る

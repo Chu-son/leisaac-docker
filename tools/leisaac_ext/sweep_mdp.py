@@ -108,6 +108,26 @@ def randomize_light(
         prim.GetAttribute("inputs:color").Set(Gf.Vec3f(*[min(1.0, c * s.item()) for c, s in zip(base_color, scale)]))
 
 
+def randomize_floor_color(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    gray_range: tuple[float, float],
+    warmth: float,
+    floor_name: str = "Floor",
+):
+    """床の色 (PreviewSurface の diffuseColor) を変える (mode="reset")。灰色の明るさを gray_range から選び、
+    赤を最大 warmth の割合で強め、青を最大 2 * warmth の割合で弱める (目標領域の青と紛れないように、青には寄せない)"""
+    for env_id in env_ids.tolist():
+        root = env.scene.stage.GetPrimAtPath(f"{env.scene.env_prim_paths[env_id]}/{floor_name}")
+        assert root.IsValid(), f"prim not found: {floor_name} (env {env_id})"
+        v = _uniform(*gray_range, 1, "cpu").item()
+        w = torch.rand(1).item() * warmth
+        color = Gf.Vec3f(min(1.0, v * (1 + w)), v, v * (1 - 2 * w))
+        for prim in Usd.PrimRange(root):
+            if prim.IsA(UsdShade.Shader):
+                UsdShade.Shader(prim).GetInput("diffuseColor").Set(color)
+
+
 def randomize_color(
     env: ManagerBasedEnv, env_ids: torch.Tensor, asset_cfg: SceneEntityCfg, color_range: dict[str, tuple[float, float]]
 ):

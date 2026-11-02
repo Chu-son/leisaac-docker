@@ -44,6 +44,9 @@ EVAL_VIDEOS       ?= 0
 # sweep-eval の 1 ラウンドの制限時間 (秒)。空ならタスクの既定 (40 秒)。datagen と dagger には効かない
 # (2026-11-01 より前の 25 秒の条件と比べるときに 25 を指定する)
 EVAL_TIME_LIMIT   ?=
+# sweep-eval の追加のランダム化の項目 (カンマ区切り。all ですべて)。空ならタスクの既定 (debris_color,light,camera)。
+# 配置の外の評価 (docs/sweep.md の「評価の配置」) で使う
+EVAL_RANDOMIZE    ?=
 # sweep-replay で再生する評価 (data/sweep/eval/<EVAL_RUN>/ の状態の記録)。空なら DATASET の datagen の記録を再生する
 EVAL_RUN          ?=
 # sweep-render の動画の左上に出す見出し (例: "ACT (exp 10)")。英数字のみ (OpenCV の文字)
@@ -54,6 +57,8 @@ TRAIN_POLICY ?= act
 TRAIN_NAME   ?= $(DATASET)-$(TRAIN_POLICY)
 TRAIN_STEPS  ?=
 TRAIN_BATCH  ?=
+# 学習の乱数のシード。空なら lerobot の既定 (1000)。学習のばらつきを見るときに変える
+TRAIN_SEED   ?=
 # import-policy で取り込む、Colab の学習結果 (tar)
 FILE         ?=
 
@@ -156,8 +161,8 @@ config:
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
-	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 40 秒)) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
-	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) FILE=$(or $(FILE),(なし))"
+	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 40 秒)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
+	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
 build:
@@ -195,7 +200,7 @@ sweep-check:
 
 # Sweep タスクの評価。EVAL_POLICY=planner は計画器 (特権情報を使う)、remote は学習したポリシー (推論サーバを先に起動する)
 sweep-eval: $(if $(filter remote,$(EVAL_POLICY)),policy-up)
-	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(EVAL_TIME_LIMIT),--time_limit=$(EVAL_TIME_LIMIT)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
+	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(EVAL_TIME_LIMIT),--time_limit=$(EVAL_TIME_LIMIT)) $(if $(EVAL_RANDOMIZE),--randomize=$(EVAL_RANDOMIZE)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		$(if $(filter remote,$(EVAL_POLICY)),--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON)) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
@@ -267,7 +272,7 @@ train:
 		echo "[エラー] data/train/$(TRAIN_NAME) は既にあります。別の名前 (TRAIN_NAME=...) を指定してください"; exit 1; \
 	fi
 	$(call TRAIN_RUN,leisaac-train) /opt/tools/sweep_train.py --policy=$(TRAIN_POLICY) --dataset_root=/workspace/data/lerobot/$(DATASET) \
-		--output_dir=/workspace/data/train/$(TRAIN_NAME) $(if $(TRAIN_STEPS),--steps=$(TRAIN_STEPS)) $(if $(TRAIN_BATCH),--batch_size=$(TRAIN_BATCH))
+		--output_dir=/workspace/data/train/$(TRAIN_NAME) $(if $(TRAIN_STEPS),--steps=$(TRAIN_STEPS)) $(if $(TRAIN_BATCH),--batch_size=$(TRAIN_BATCH)) $(if $(TRAIN_SEED),--seed=$(TRAIN_SEED))
 
 # Colab に渡すデータセットを 1 つの tar にする。Drive へは、ブラウザで手動で上げる (トークンを使わない)
 colab-data:

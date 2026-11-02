@@ -52,6 +52,7 @@ parser.add_argument("--steps", type=int, default=None)
 parser.add_argument("--batch_size", type=int, default=None)
 parser.add_argument("--save_freq", type=int, default=None, help="チェックポイントを残す間隔 (省略時は steps の 1/5)")
 parser.add_argument("--num_workers", type=int, default=4)
+parser.add_argument("--seed", type=int, default=None, help="学習の乱数のシード (省略時は lerobot の既定の 1000)")
 parser.add_argument("extra", nargs="*", help="-- の後ろに書いた引数は、そのまま lerobot-train に渡す")
 args = parser.parse_args()
 assert os.path.isfile(f"{args.dataset_root}/meta/info.json"), f"{args.dataset_root} は LeRobot 形式のデータセットではない"
@@ -71,6 +72,7 @@ cmd = [
     f"--save_freq={args.save_freq or max(1, steps // 5)}",
     f"--log_freq={min(200, max(1, steps // 10))}",
     f"--num_workers={args.num_workers}",
+    *([f"--seed={args.seed}"] if args.seed is not None else []),
     "--policy.device=cuda",
     "--policy.push_to_hub=false",
     "--wandb.enable=false",
