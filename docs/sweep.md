@@ -241,6 +241,50 @@ sim、変換、学習、推論のすべてが、このファイルの定義に�
   - 大きさは、設計用の 30 配置で計画器の成功率が 90% 以上のうち最大のものにする。`make sweep-eval`（計画器）にも `DATAGEN_NOISE` が効く。
 - HDF5 のエピソードの属性: `source`（`planner`、`dart`、`dagger`）、`round`（datagen のラウンドの番号）、`dart_noise`、`disturb`（外乱の中身の JSON）。`make convert` は `source` で、失敗したエピソードを使ってよいか（`dagger` だけ）を決める。`source` のない古い記録は、`executed_actions` があれば `dagger` とみなす。
 
+### 言語で目標を選ぶ（2026-11-04 から。「今後」の S2）
+
+タスク `LeIsaac-LeKiwi-Sweep-Lang-v0`（`sweep_floor.SweepLangEnvCfg`）は、床のタスクに、目標領域と同じ大きさの正方形を 2 つ足したもの。指示文で色を指定した 1 つが目標領域になる。make では `SWEEP_TASK=LeIsaac-LeKiwi-Sweep-Lang-v0` を付ける（sweep-eval、datagen、dagger、sweep-replay、sweep-render に効く）。
+
+- **正方形**: 目標領域 `target`（指示した色）と、`distractor_0`、`distractor_1`（見た目だけ）。
+  - 成功の判定（指示した正方形に 8 個）、計画器、外乱、再生は `target` だけを見る。
+  - 色は青 (0.10, 0.35, 0.85)、白 (0.92, 0.92, 0.92)、紫 (0.60, 0.15, 0.80)。ゴミの色（固定の色と、`debris_color` の範囲 b ≤ 0.35）から離した。
+- **配置**（`reset_layout` の `distractors`）:
+  - 3 つの正方形は、どれもゴミのまとまりの中心から 0.45〜0.7m に置く。距離では、どれが目標か分からない。
+  - 正方形の中心どうしは 0.4m 以上離す。ゴミは、どの正方形からも縁から 3cm 以上外に置く。
+  - 最初の front の画像に、すべてが写るようにする。画角の条件は、見直した後の front の半画角から 0.1rad を引いた値（床のタスクは、配置をそろえるために、見直す前の値のまま）。
+  - 位置と色の割り当てを先に決め、最後に、どの正方形を目標にするかを一様に選ぶ。正方形の乱数は、ほかの乱数の後に引くので、床のタスクの配置は変わらない（S0 の確認用のシードで 5 ラウンド、setup/ と action がビット単位で一致することを確かめた）。
+- **指示文**（`contract.LANG_TEMPLATES`）: 型の `{color}` に色の名前（blue、white、purple）を入れる。
+  - 学習用は 3 つ: "Sweep the debris into the {color} square"、"Push the trash onto the {color} square"、"Clean the floor by sweeping the debris to the {color} area"。datagen は、numpy の `[シード, ラウンド, 2]` で 1 つを選ぶ。
+  - 言い換えは 2 つで、学習に使わない（`EVAL_INSTRUCTIONS=paraphrase`）: "Move all the litter to the {color} mat"、"Gather the dirt in the {color} region of the floor"。
+- **記録**:
+  - HDF5 のエピソードの属性に `instruction` と `goal_color` を残す。`make convert` は `instruction` を LeRobot の `task` にする（属性のない記録は固定の指示文）。
+  - rounds.jsonl と状態の記録の `meta/` にも、指示文と色を残す。
+  - 正方形の色は状態の記録の `setup/squares/color` に残し、sweep-render と sweep-replay で戻す。
+- **対にした評価**（記録しないときは常にこうする）:
+  - ラウンド r は、配置の番号 r // 3 で、その配置の r % 3 番の正方形を目標にする。配置は `env.reset(seed=配置のシード)` で作り直す。同じ配置の 3 ラウンドは、見た目が同じで、指示文だけが違う。
+  - 指示文の型は、配置の番号で順に回す。ラウンドの数は 3 の倍数にする。
+  - reset の後の画像には、前の場面の残像が残る（RTX の描画が前のフレームを蓄積し、reset は 1 回だけ描画する）。そこで、同じシードで 24 回 reset してから始める。
+    - 確かめた結果: 同じ配置のラウンドどうしで、最初の画像の差は動画の圧縮の差の程度（画素の平均 0.5〜1.0）になった。
+    - reset が 1 回のときは、前の配置の正方形が薄く写り、差は 1.7〜4.0 だった。
+  - datagen と床のタスクの評価は、今までどおり 1 回だけ reset する。そのため、エピソードの最初の数フレームには残像がある。
+- **指標**:
+  - 行き先 `destination`: ラウンドの終わりに、ゴミが最も多く入っている正方形の色。最大が 3 個未満か、同数なら None。
+  - `correct`: 行き先が指示した色と一致したか。
+  - `square_counts`: 色ごとの個数。
+  - `summary.json`: `correct`、`correct_rate`、`correct_ci95`（Wilson）、`destination_none`、`correct_per_layout`（配置ごとに 3 つの指示のうち合った数が 0、1、2、3 だった配置の数）。
+  - 言語を見ないポリシーは、同じ配置ではどの指示でも同じ所へ行くので、`correct_rate` は 1/3 以下になる。
+
+| 名前 | シード | ラウンド | 指示文 | 使い方 |
+|---|---|---|---|---|
+| 言語の確認用 | 20261106 | 90（30 配置 × 3） | 学習用（`EVAL_INSTRUCTIONS=train`） | 指示どおりに行き先を変えるか |
+| 言い換え | 20261107 | 60（20 配置 × 3） | 言い換え（`EVAL_INSTRUCTIONS=paraphrase`） | 学習にない言い方でも従うか |
+
+- **合格の線**（学習の前に決めた）:
+  - 主: 言語の確認用で、`correct_rate` の 95% 信頼区間の下限が 50% を超えること。
+  - 副: 言い換えで、下限が 1/3 を超えること。
+  - 同じ配置のラウンドは独立ではないので、`correct_per_layout` も書く。
+- **違反の線**（事前に決めた）: 計画器の言語の確認用で、配置の条件を満たさないラウンドが 1 割を超えたら、正方形を 2 つにする。
+
 ### 評価の時間（2026-11-02 に測定）
 
 100 ラウンドの評価は約 30 分かかる（sim はほぼ実時間で進む）。計画器の 5 ラウンドで内訳を測ると、描画が 56%、観測の計算（カメラの画像の取り出し）が 17%、物理が 10%、Python の処理（ゴミの数え上げ、状態の記録、計画器）が合わせて約 10% だった。速くする方法を 2 つ試したが、どちらも採らなかった。
