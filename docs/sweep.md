@@ -218,7 +218,7 @@ sim、変換、学習、推論のすべてが、このファイルの定義に�
 
 ### 外乱と配置の型（2026-11-02 から。「今後」の S1）
 
-確認用では ACT が 93% と満点に近く、改良の差が見えにくい。差が出やすい評価として、外乱（`EVAL_DISTURB`、`tools/leisaac_ext/disturb.py`）と配置の型（`EVAL_LAYOUT`、`sweep_floor.LAYOUTS`）を足した。どちらも評価用で、`make datagen` には使えない。
+確認用では ACT が 93% と満点に近く、改良の差が見えにくい。差が出やすい評価として、外乱（`EVAL_DISTURB`、`tools/leisaac_ext/disturb.py`）と配置の型（`EVAL_LAYOUT`、`sweep_floor.LAYOUTS`）を足した。どちらも評価用で、`make datagen` には使えない（こぼしを入れたデモの `DATAGEN_DISTURB=spill` だけは例外。下）。
 
 - 外乱は 1 ラウンドに 1 種類だけで、ラウンドの番号で順に割り当てる（`push,spill` なら偶数のラウンドが push）。
   - `push`（台車を押す）: 2〜7 秒のどこかで 1 回、台車の位置を左右に 10〜15cm、向きを 5〜15° ずらす（仮想の関節に書き込む）。ずらした先で台車か穂がゴミに重なるなら、次のフレームに延ばす。
@@ -228,6 +228,18 @@ sim、変換、学習、推論のすべてが、このファイルの定義に�
   - 記録: `rounds.jsonl` と状態の記録の `meta/` に、`disturb`（種類）、`disturb_applied`（起きたか。push の前にラウンドが終わると起きない）、`disturb_frame`、`push_shift`、`push_yaw`、`spill_ids`、`spill_xy`。`summary.json` の `disturb_<種類>` は [成功、ラウンド、外乱が起きたラウンド]。
 - 配置の型 `scatter` は、ゴミを 5×4 の格子、間隔 11cm から 10 個選ぶ（`default` は 4×3、間隔 8cm）。広げた分、ゴミが目標領域の縁から 5cm 以上外にあること、y が 0.75m 以上（穂より先）であることを、配置の条件に足す。`default` ではこの条件を使わないので、配置は今までと同じ。条件を満たす配置が見つからないと、最も近いものを使う。その違反の値を `rounds.jsonl` の `layout_violation` に残す（0 なら条件をすべて満たす。`summary.json` の `layout_violation_rounds` は 0 より大きいラウンドの数）。
 - 外乱があると、`base_min_dist` と `view_fraction` は悪く見える。外乱や配置の型が違う結果どうしでは、これらを比べない。
+
+立て直しを学ばせるデータ（S1 の段階 B、2026-11-03 から）は、`make datagen` の次の変数で作る。
+
+- `DATAGEN_SEED`: datagen の乱数のシード（空なら現在時刻）。評価のシードとは別の値にする。
+- `DATAGEN_DISTURB=spill`: こぼしを入れたデモ。計画器がこぼれたゴミを拾い直す場面を記録する。datagen に使える外乱は `spill` だけ。こぼしは action ではないので、sweep-replay では再現しない（こぼしが起きたエピソードは、記録と合わない）。
+- `DATAGEN_NOISE=<m/s>`: DART。計画器の action に揺らぎを足して動かし、揺らぎのない計画器の action を `actions` に、実際に動かした action を `executed_actions` に記録する（成功したエピソードだけ）。sweep-replay は `executed_actions` で再生する。
+  - 揺らぎは OU 過程（時定数 0.5 秒）。大きさは、台車の並進の速度に `DATAGEN_NOISE`（m/s）、回転に 2 倍（rad/s）、アームの 5 関節に 0.5 倍（rad）。グリッパには足さない。
+  - 台車には、揺らぎの増分を足す。計画器は次の指令を、揺らぎを足した指令から加速度の上限をかけて作る（ずれた速度から立て直す動きが正解になる）。揺らぎをそのまま足すと、ずれが毎フレーム積み重なり、計画器は開始位置に着けなかった（0/16）。
+  - 計画器が止まっている段階（init、lower、idle）と、開始位置に着く手前（15cm 以内。1cm 以内で止まってから穂を下ろす）では揺らぎを 0 にする。
+  - 乱数は numpy（`[シード, ラウンド, 1]`）だけを使う。配置は揺らぎなしと同じになる。`DATAGEN_NOISE=0` では、`actions` と `executed_actions`、揺らぎなしの記録の `actions` と関節の状態が、ビット単位で一致する（カメラの画像は、描画の差で画素の平均 0.3 程度違う）。
+  - 大きさは、設計用の 30 配置で計画器の成功率が 90% 以上のうち最大のものにする。`make sweep-eval`（計画器）にも `DATAGEN_NOISE` が効く。
+- HDF5 のエピソードの属性: `source`（`planner`、`dart`、`dagger`）、`round`（datagen のラウンドの番号）、`dart_noise`、`disturb`（外乱の中身の JSON）。`make convert` は `source` で、失敗したエピソードを使ってよいか（`dagger` だけ）を決める。`source` のない古い記録は、`executed_actions` があれば `dagger` とみなす。
 
 ### 評価の時間（2026-11-02 に測定）
 

@@ -18,6 +18,12 @@ EPISODES    ?=
 CONVERT_FROM ?= $(DATASET)
 # dagger で、chunk ごとに計画器の action で動かす確率 (0 なら学習したポリシーだけで動かす)
 DAGGER_BETA ?= 0
+# datagen の乱数のシード (空なら現在時刻。評価のシードとは別にする)、外乱 (spill だけ使える。こぼしを拾い直すデモ)、
+# DART の揺らぎの大きさ (台車の並進の速度の標準偏差、m/s。空なら揺らぎなし。sweep-eval の計画器にも効く。大きさを決めるため)。
+# docs/sweep.md の「外乱と配置の型」
+DATAGEN_SEED    ?=
+DATAGEN_DISTURB ?=
+DATAGEN_NOISE   ?=
 
 # --- sim の設定 (すべてのタスクで共通)。既定は VRAM 12GB 向けで、物理演算を CPU にし、
 # テクスチャストリーミングの予算 (VRAM に対する割合) を絞る。VRAM に余裕があれば .env で
@@ -160,7 +166,7 @@ help:
 config:
 	@echo ".env: $(if $(wildcard .env),あり,なし)"
 	@echo "[対象と記録] TASK=$(TASK) DEVICE=$(DEVICE) DATASET=$(DATASET) RESUME=$(RESUME) FORCE=$(FORCE) LEADER_PORT=$(LEADER_PORT)"
-	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) DAGGER_BETA=$(DAGGER_BETA)"
+	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) DAGGER_BETA=$(DAGGER_BETA) DATAGEN_SEED=$(or $(DATAGEN_SEED),(現在時刻)) DATAGEN_DISTURB=$(or $(DATAGEN_DISTURB),(なし)) DATAGEN_NOISE=$(or $(DATAGEN_NOISE),(なし))"
 	@echo "[sim]        SIM_DEVICE=$(SIM_DEVICE) TEX_BUDGET=$(or $(TEX_BUDGET),(Kit の既定 0.6))"
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
@@ -204,7 +210,7 @@ sweep-check:
 
 # Sweep タスクの評価。EVAL_POLICY=planner は計画器 (特権情報を使う)、remote は学習したポリシー (推論サーバを先に起動する)
 sweep-eval: $(if $(filter remote,$(EVAL_POLICY)),policy-up)
-	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(EVAL_TIME_LIMIT),--time_limit=$(EVAL_TIME_LIMIT)) $(if $(EVAL_RANDOMIZE),--randomize=$(EVAL_RANDOMIZE)) $(if $(EVAL_DISTURB),--disturb=$(EVAL_DISTURB)) --layout=$(EVAL_LAYOUT) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
+	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(EVAL_TIME_LIMIT),--time_limit=$(EVAL_TIME_LIMIT)) $(if $(EVAL_RANDOMIZE),--randomize=$(EVAL_RANDOMIZE)) $(if $(EVAL_DISTURB),--disturb=$(EVAL_DISTURB)) --layout=$(EVAL_LAYOUT) $(if $(and $(DATAGEN_NOISE),$(filter planner,$(EVAL_POLICY))),--dart_noise=$(DATAGEN_NOISE)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		$(if $(filter remote,$(EVAL_POLICY)),--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON)) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
@@ -216,7 +222,7 @@ datagen:
 	fi
 	@mkdir -p $(dir $(SIM_RECORD)) && printf 'SIM_DEVICE=%s\nTEX_BUDGET=%s\n' "$(SIM_DEVICE)" "$(TEX_BUDGET)" > $(SIM_RECORD)
 	$(call SIM_RUN,leisaac-datagen) /opt/tools/sweep_eval.py --policy=planner --record --dataset_file=$(DATASET_FILE) \
-		--num_demos=$(NUM) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+		--num_demos=$(NUM) $(if $(DATAGEN_SEED),--seed=$(DATAGEN_SEED)) $(if $(DATAGEN_DISTURB),--disturb=$(DATAGEN_DISTURB)) $(if $(DATAGEN_NOISE),--dart_noise=$(DATAGEN_NOISE)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
 # DAgger のデータ。学習したポリシー (推論サーバ) で動かし、各フレームの計画器の action を正解として、すべてのラウンドを記録する
 dagger: policy-up

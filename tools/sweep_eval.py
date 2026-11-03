@@ -14,6 +14,8 @@ front カメラの水平の画角に入っていたフレームの割合 (ゴミ
 状態とランダム化の値、30fps のフレームごとの状態と action)。sweep_replay.py --eval_dir で再生でき、動画も作り直せる。
 --disturb push,spill は、ラウンドごとに外乱を 1 種類加える (ラウンドの番号で順に割り当てる。leisaac_ext.disturb)。
 --layout は配置の型 (sweep_floor.LAYOUTS。scatter はゴミを広く散らす)。どちらも評価用で、--record とは使えない。
+ただし --disturb spill だけは、こぼしを拾い直すデモを作るために --record と使える (こぼしは HDF5 の再生では再現しない。
+エピソードの属性 disturb に、こぼしの中身を残す)。
 --videos を付けると、ラウンドごとの動画 (videos/round_<番号>_<success|failure>.mp4。front、wrist、上から見た図を
 並べた 30fps の実時間) と、全ラウンドの終わりの図を並べた overview.png も残す (leisaac_ext.sweep_video)。
 --record を付けると、成功したエピソードだけを HDF5 に記録する (isaaclab の RecorderManager。上流の teleop と同じ形式)。
@@ -23,6 +25,12 @@ front カメラの水平の画角に入っていたフレームの割合 (ゴミ
 actions に記録する。実際に動かした action は executed_actions に残す。成功も失敗も、すべてのラウンドを記録する。
 計画器は台車の速度の指令を自分の前の指令から加速度の上限をかけて作るので、--dagger では毎フレーム、
 実際の台車の速度に合わせ直す (ポリシーが動かした後の状態から、どう立て直すかを正解にする)。
+--dart_noise (--policy planner と一緒に使う) は DART のデータを作る。計画器の action に揺らぎ (DartNoise) を
+足して動かし、揺らぎのない計画器の action を actions に、実際に動かした action を executed_actions に記録する。
+計画器の速度の指令は、毎フレーム、揺らぎを足した指令に合わせ直す (揺らいだ状態から計画器が出す action を正解にする)。
+成功したエピソードだけを記録する (--record なしでは、揺らぎの大きさを決めるために成功率だけを測る)。
+--dart_noise 0 では、actions と executed_actions はビット単位で一致する。
+--record では、エピソードの属性 source (planner、dart、dagger) を HDF5 に残す (sweep_convert.py が読む)。
 """
 import argparse
 
@@ -47,6 +55,8 @@ parser.add_argument("--dataset_file", default=None, help="記録先の HDF5 (--r
 parser.add_argument("--num_demos", type=int, default=50, help="記録する成功エピソードの数 (--record)")
 parser.add_argument("--dagger", action="store_true", help="DAgger のデータを作る (--policy remote と --record と一緒に使う)")
 parser.add_argument("--dagger_beta", type=float, default=0.0, help="--dagger で、chunk ごとに計画器の action で動かす確率")
+parser.add_argument("--dart_noise", type=float, default=None,
+                    help="DART の揺らぎの大きさ (台車の並進の速度の標準偏差、m/s。--policy planner と一緒に使う)")
 parser.add_argument("--time_limit", type=float, default=None, help="1 ラウンドの制限時間 (秒。省略時はタスクの既定の 40 秒)")
 parser.add_argument("--videos", action="store_true", help="ラウンドごとの動画と overview.png を out_dir に残す")
 AppLauncher.add_app_launcher_args(parser)
@@ -70,20 +80,67 @@ import leisaac  # noqa: F401
 from leisaac_ext import broom, contract, disturb, remote, sweep_floor, sweep_log, sweep_mdp, sweep_planner, sweep_video
 
 
-class PlannerPolicy:
-    """計画器を、ポリシーのインタフェースで包む。観測の代わりに sim の真値を読む"""
+class DartNoise:
+    """DART の揺らぎ。OU 過程 n (時定数 TAU 秒、定常の標準偏差を指定する) を sim の action (9 次元) に足す。
+    大きさは、台車の並進の速度に scale (m/s)、回転の速度に scale * ANG_PER_LIN (rad/s)、アームの 5 関節に scale * ARM_PER_LIN (rad)。
+    グリッパ (箒を握る) には足さない。
+    - アーム: n をそのまま足す。
+    - 台車: n の増分 (前のフレームとの差) を足す。計画器は次の指令を、揺らぎを足した指令から加速度の上限をかけて作るので、
+      ずれは計画器が直すまで残る (直さなければ、ずれは n と同じになる)。n をそのまま足すと、ずれが毎フレーム積み重なる。
+    計画器が止まっている段階 (QUIET_PHASES) と、開始位置に着く手前 (計画器は 1cm 以内で止まってから穂を下ろす) では 0 にする
+    (過程は進める)。乱数は numpy (np.random.default_rng([seed, ラウンド, 1])) だけを使う。torch の乱数を使わないので、
+    配置は揺らぎなしと同じになる"""
 
-    def __init__(self, env):
+    TAU = 0.5
+    ANG_PER_LIN = 2.0
+    ARM_PER_LIN = 0.5
+    QUIET_PHASES = ("init", "lower", "idle")
+
+    def __init__(self, scale: float, dt: float = 1.0 / contract.FPS):
+        self.std = np.zeros(9)
+        self.std[:5] = scale * self.ARM_PER_LIN
+        self.std[6:8] = scale
+        self.std[8] = scale * self.ANG_PER_LIN
+        self.decay = math.exp(-dt / self.TAU)
+
+    def reset(self, seed: int, round_index: int) -> None:
+        self.rng = np.random.default_rng([seed, round_index, 1])
+        self.x = self.rng.standard_normal(9) * self.std
+
+    def sample(self, quiet: bool) -> np.ndarray:
+        prev = self.x
+        self.x = self.decay * self.x + math.sqrt(1 - self.decay**2) * self.std * self.rng.standard_normal(9)
+        out = self.x.copy()
+        out[6:9] = self.x[6:9] - prev[6:9]
+        return np.zeros(9) if quiet else out
+
+
+class PlannerPolicy:
+    """計画器を、ポリシーのインタフェースで包む。観測の代わりに sim の真値を読む。
+    noise (DartNoise) を渡すと、揺らぎを足した action を返し、揺らぎのない action を clean_action に残す"""
+
+    def __init__(self, env, noise: "DartNoise | None" = None):
         self.env = env
         self.poses = sweep_planner.calibrate_arm(env)
         self.planner = sweep_planner.SweepPlanner(self.poses)
+        self.noise = noise
+        self.clean_action = None
 
     def reset(self) -> None:
         self.planner.reset()
 
     def act(self, obs) -> np.ndarray:
-        action = self.planner.act(sweep_planner.read_state(self.env))
+        state = sweep_planner.read_state(self.env)
+        p = self.planner
+        quiet = p.phase in DartNoise.QUIET_PHASES or (
+            p.phase == "travel" and len(p.route) == 1 and np.linalg.norm(p.route[0] - state.base) < sweep_planner.LOOK_NEAR)
+        action = self.planner.act(state)
         joint_pos = obs["joint_pos"][0].cpu().numpy().astype(np.float64)
+        if self.noise is not None:
+            self.clean_action = contract.to_lerobot(joint_pos, np.zeros_like(joint_pos), action)[1]
+            action = action + self.noise.sample(quiet)
+            # 次の指令は、揺らぎを足した指令から加速度の上限をかけて作る (実際に動かした速度から立て直す)
+            self.planner.vel = action[6:9].copy()
         return contract.to_lerobot(joint_pos, np.zeros_like(joint_pos), action)[1][None]
 
     def info(self) -> dict:
@@ -121,14 +178,14 @@ class RemotePolicy:
 
 
 class ExpertActionsRecorder(RecorderTerm):
-    """--dagger: actions に、実際に動かした action ではなく、計画器の action (env.expert_action) を記録する"""
+    """--dagger、--dart_noise: actions に、実際に動かした action ではなく、計画器の (揺らぎのない) action (env.expert_action) を記録する"""
 
     def record_pre_step(self):
         return "actions", self._env.expert_action
 
 
 class ExecutedActionsRecorder(RecorderTerm):
-    """--dagger: 実際に動かした action を executed_actions に記録する"""
+    """--dagger、--dart_noise: 実際に動かした action を executed_actions に記録する"""
 
     def record_pre_step(self):
         return "executed_actions", self._env.action_manager.action
@@ -153,7 +210,13 @@ if args.dagger:
 disturb_kinds = [k for k in (args.disturb or "").split(",") if k]
 assert not set(disturb_kinds) - set(disturb.KINDS), f"--disturb は {disturb.KINDS} から選ぶ"
 assert args.layout in sweep_floor.LAYOUTS, f"--layout は {sorted(sweep_floor.LAYOUTS)} から選ぶ"
-assert not (args.record and (disturb_kinds or args.layout != "default")), "--disturb と --layout は --record と一緒に使えない"
+dart = args.dart_noise is not None
+if dart:
+    assert args.policy == "planner" and args.dart_noise >= 0, "--dart_noise (0 以上) は --policy planner と一緒に使う"
+assert not (args.record and args.layout != "default"), "--layout は --record と一緒に使えない"
+assert not (args.record and disturb_kinds and (disturb_kinds != ["spill"] or args.dagger)), \
+    "--record と一緒に使える外乱は spill だけ (--dagger とは使えない)"
+source = "dagger" if args.dagger else "dart" if dart else "planner"
 if args.record:
     assert args.dataset_file and args.dataset_file.endswith(".hdf5"), "--record には --dataset_file (.hdf5) が要る"
     # isaaclab の HDF5 の書き出しは、既存のファイルを上書きする
@@ -174,7 +237,7 @@ if args.record:
     cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
     cfg.recorders.dataset_export_dir_path = os.path.dirname(args.dataset_file)
     cfg.recorders.dataset_filename = os.path.basename(dataset_stem)
-    if args.dagger:
+    if args.dagger or dart:
         cfg.recorders.record_pre_step_actions = PreStepActionsRecorderCfg(class_type=ExpertActionsRecorder)
         cfg.recorders.record_pre_step_executed_actions = PreStepActionsRecorderCfg(class_type=ExecutedActionsRecorder)
 else:
@@ -190,8 +253,8 @@ env = gym.make(args.task, cfg=cfg).unwrapped
 # 計画器の IK (calibrate_arm) は関節の状態を書き換える。その後の reset で元に戻る
 env.reset()
 if args.policy == "planner":
-    policy = PlannerPolicy(env)
-    print(f"policy=planner seed={seed} brush tip (base frame)={policy.poses.tip.round(3).tolist()}", flush=True)
+    policy = PlannerPolicy(env, DartNoise(args.dart_noise) if dart else None)
+    print(f"policy=planner seed={seed} dart_noise={args.dart_noise} brush tip (base frame)={policy.poses.tip.round(3).tolist()}", flush=True)
 else:
     policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon)
     print(f"policy=remote seed={seed} action_horizon={args.action_horizon} server={policy.server}", flush=True)
@@ -238,6 +301,8 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         if args.record and not args.dagger and n_ok >= args.num_demos:
             break
         policy.reset()
+        if dart:
+            policy.noise.reset(seed, r)
         if expert:
             expert.reset()
         t0, steps, success, done = time.time(), 0, False, False
@@ -269,6 +334,10 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     env.expert_action = expert_action
                     if use_expert:
                         sim_action = expert_action
+                elif dart:
+                    # 揺らぎのない計画器の action を、実際に動かす action と同じ経路で sim の action にする
+                    env.expert_action = torch.tensor(contract.from_lerobot_action(policy.clean_action, joint_pos), dtype=torch.float32,
+                                                    device=env.device)[None]
                 if dist:
                     # フレームの境目 (記録と step の前) で外乱を加える
                     dist.step(steps // contract.SIM_STEPS_PER_FRAME, disturb_ctx)
@@ -283,7 +352,7 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                         if in_view is not None:
                             view_frames += in_view
                             pending_frames += 1
-                        extra = {"expert_action": env.expert_action[0]} if expert else {}
+                        extra = {"expert_action": env.expert_action[0]} if expert or dart else {}
                         if args.policy == "planner":  # 計画器の段階 (sweep_planner.PHASES の番号)
                             extra["planner_phase"] = np.int8(sweep_planner.PHASES.index(policy.planner.phase))
                         # in_view: 押し終わっていないゴミが front の画角に入っているか (1/0。押し終わっていなければ -1)
@@ -329,6 +398,15 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
             exported = env.recorder_manager.exported_successful_episode_count
             assert exported == n_ok, f"記録したエピソードの数 ({exported}) が成功の数 ({n_ok}) と合わない"
             result["episode"] = n_ok - 1 if success else None
+        if args.record and result["episode"] is not None:
+            # エピソードの属性に、作り方 (sweep_convert.py が読む) と外乱を残す。書き出し中の HDF5 に書く
+            group = env.recorder_manager._dataset_file_handler._hdf5_data_group[f"demo_{result['episode']}"]
+            group.attrs["source"] = source
+            group.attrs["round"] = r
+            if dart:
+                group.attrs["dart_noise"] = args.dart_noise
+            if dist:
+                group.attrs["disturb"] = json.dumps(dist.info)
         results.append(result)
         log.write(json.dumps(result) + "\n")
         log.flush()
@@ -363,8 +441,12 @@ if args.policy == "remote":
 if args.record:
     summary.update(dataset_file=args.dataset_file, num_demos=n if args.dagger else n_ok,
                    dataset_bytes=os.path.getsize(args.dataset_file) if os.path.exists(args.dataset_file) else 0)
+if args.record:
+    summary.update(source=source)
 if args.dagger:
     summary.update(dagger=True, dagger_beta=args.dagger_beta)
+if dart:
+    summary.update(dart_noise=args.dart_noise)
 if maps:
     cv2.imwrite(f"{out_dir}/overview.png", cv2.cvtColor(sweep_video.overview(maps), cv2.COLOR_RGB2BGR))
 with open(f"{out_dir}/summary.json", "w") as f:

@@ -9,8 +9,9 @@
   前後に 1 フレームずらしたときの差より小さいことも確かめる (フレームのずれの検出)
 - 変換元と結果は root の convert.json に残す
 - --dataset_file に複数の HDF5 を並べると、順につないで 1 つのデータセットにする (例: 計画器のデータと DAgger のデータ)。
-  datagen のエピソードは成功したものだけのはず。DAgger のエピソード (executed_actions がある。sweep_eval.py --dagger) は、
-  actions が計画器の正解なので、失敗したラウンドも使う
+  エピソードの作り方は属性 source (sweep_eval.py が残す。planner、dart、dagger) で見分ける。source のない古い記録は、
+  executed_actions があれば dagger、なければ planner とみなす。dagger のエピソードは actions が計画器の正解なので、
+  失敗したラウンドも使う。それ以外 (planner、dart) は成功したものだけのはず
 """
 import argparse
 import contextlib
@@ -44,6 +45,11 @@ FEATURES = {
 }
 
 
+def episode_source(group: h5py.Group) -> str:
+    """エピソードの作り方 (planner、dart、dagger)"""
+    return str(group.attrs.get("source", "dagger" if "executed_actions" in group else "planner"))
+
+
 def load_episode(group: h5py.Group) -> dict:
     """エピソードを 30fps のフレームにする。値は LeRobot 形式 (state、action は [T, 9]、画像は [T, 240, 320, 3] uint8)"""
     idx = contract.frame_indices(len(group["actions"]))
@@ -60,10 +66,12 @@ with contextlib.ExitStack() as stack:
         data = stack.enter_context(h5py.File(path, "r"))["data"]
         names = [f"demo_{i}" for i in range(len(data))]
         assert set(names) == set(data), f"{path}: エピソードの名前が demo_0 〜 demo_{len(data) - 1} になっていない: {sorted(data)}"
-        failed = [n for n in names if not data[n].attrs.get("success") and "executed_actions" not in data[n]]
+        sources = {n: episode_source(data[n]) for n in names}
+        failed = [n for n in names if not data[n].attrs.get("success") and sources[n] != "dagger"]
         assert not failed, f"{path}: 成功していないエピソードがある (datagen は成功したものだけを記録する): {failed[:5]}"
         groups += [data[n] for n in names]
-        print(f"{path}: {len(names)} episodes ({sum('executed_actions' in data[n] for n in names)} from DAgger)", flush=True)
+        counts = {s: list(sources.values()).count(s) for s in sorted(set(sources.values()))}
+        print(f"{path}: {len(names)} episodes {counts} ({sum('disturb' in data[n].attrs for n in names)} with disturbance)", flush=True)
 
     # robot_type は、実機の LeKiwi を lerobot で記録したときと同じ名前 (LeKiwiClient.name)
     dataset = LeRobotDataset.create(repo_id, contract.FPS, FEATURES, root=args.root, robot_type="lekiwi_client",

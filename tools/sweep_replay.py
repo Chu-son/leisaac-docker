@@ -4,6 +4,8 @@
 エピソードごとに、記録した初期状態に戻し (reset_to)、記録した sim の action を順に流す。流し終えたときの、
 目標領域に入ったゴミの個数 (8 個以上で成功) と、ゴミの最終位置の記録とのずれを調べる。
 ヘッドレスでなければ、実時間の速さで GUI に表示する。
+DART と DAgger の記録は、実際に動かした action (executed_actions) で再生する。こぼし (sweep_eval.py --disturb spill
+--record、エピソードの属性 disturb) は action ではないので再現せず、こぼしが起きたエピソードは記録と合わない。
 見た目のランダム化 (ゴミの色、照明、カメラの位置) は状態に含まれないので、再生の見た目は記録と違う (物理には影響しない)。
 --eval_dir (評価の out_dir) を渡すと、states/round_<番号>.npz (leisaac_ext.sweep_log) を再生する。ランダム化の値も
 記録どおりに戻すので、--videos で、評価のときと同じ見た目の動画を作り直せる。ゴミの位置は、フレームごとに記録と比べる。
@@ -127,7 +129,7 @@ with open(f"{out_dir}/replay.jsonl", "w") as log:
                   f"max_debris_error={result['max_debris_error'] * 100:.2f}cm frames={result['frames']}", flush=True)
             continue
         episode = handler.load_episode(f"demo_{i}", env.device)
-        # DAgger の記録 (sweep_eval.py --dagger) の actions は計画器の正解なので、実際に動かした action で再生する
+        # DAgger と DART の記録 (sweep_eval.py --dagger、--dart_noise) の actions は計画器の正解なので、実際に動かした action で再生する
         actions = episode.data.get("executed_actions", episode.data["actions"])
         env.reset_to(episode.get_initial_state(), env_ids, is_relative=True)
         t0 = time.time()
