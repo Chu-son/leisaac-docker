@@ -187,6 +187,12 @@ def _debris_names(env) -> list[str]:
     return sorted((n for n in env.scene.rigid_objects if n.startswith("debris_")), key=lambda n: int(n.split("_")[1]))
 
 
+def square_names(env) -> list[str]:
+    """目標領域と、ほかの正方形 (S2 の言語のタスクの distractor_<番号>) の名前。目標領域が先"""
+    others = sorted(n for n in env.scene.rigid_objects if n.startswith("distractor_"))
+    return [n for n in ("target",) if n in env.scene.rigid_objects] + others
+
+
 def capture_setup(env, env_id: int = 0) -> dict[str, np.ndarray]:
     """ラウンドの初めの状態 (setup/...)。ゴミと目標領域の配置、ロボットの関節は init に、ランダム化の値はその他に入る"""
     out = {}
@@ -201,6 +207,9 @@ def capture_setup(env, env_id: int = 0) -> dict[str, np.ndarray]:
         out["setup/floor/color"] = np.array(floor[0].GetInput("diffuseColor").Get(), np.float32)
     names = _debris_names(env)
     out["setup/debris/color"] = np.array([_shaders(env, n, env_id)[0].GetInput("diffuseColor").Get() for n in names], np.float32)
+    # 正方形の色 (square_names の並び)。S2 の言語のタスクでは、ラウンドごとに変わる
+    out["setup/squares/color"] = np.array([_shaders(env, n, env_id)[0].GetInput("diffuseColor").Get()
+                                           for n in square_names(env)], np.float32)
     out["setup/debris/mass"] = np.stack([_np(env.scene[n].root_physx_view.get_masses())[env_id] for n in names])
     # [ゴミ, 形状, (静止摩擦, 動摩擦, 反発)]
     out["setup/debris/material"] = np.stack([_np(env.scene[n].root_physx_view.get_material_properties())[env_id] for n in names])
@@ -225,6 +234,10 @@ def apply_setup(env, arrays: dict, env_id: int = 0) -> None:
     if "setup/floor/color" in arrays:  # 2026-11-02 より前の記録にはない (床は既定の色)
         for shader in _floor_shaders(env, env_id):
             shader.GetInput("diffuseColor").Set(Gf.Vec3f(*arrays["setup/floor/color"].tolist()))
+    if "setup/squares/color" in arrays:  # 2026-11-04 より前の記録にはない (目標領域は既定の色)
+        for name, color in zip(square_names(env), arrays["setup/squares/color"]):
+            for shader in _shaders(env, name, env_id):
+                shader.GetInput("diffuseColor").Set(Gf.Vec3f(*color.tolist()))
     cpu_ids = torch.tensor([env_id])
     for i, name in enumerate(_debris_names(env)):
         for shader in _shaders(env, name, env_id):

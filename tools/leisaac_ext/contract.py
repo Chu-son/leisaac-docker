@@ -21,6 +21,19 @@ ACTION_NAMES = STATE_NAMES
 CAMERAS = ("front", "wrist")
 IMAGE_SHAPE = (240, 320, 3)  # (高さ, 幅, チャンネル)
 INSTRUCTION = "Sweep the debris into the marked square on the floor"
+# S2 の言語で目標を選ぶタスク (LeIsaac-LeKiwi-Sweep-Lang-v0) の指示文の型。{color} に目標領域の色の名前が入る。
+# train は学習データに使う。paraphrase は学習に使わない言い換えで、評価だけに使う (docs/sweep.md の「言語で目標を選ぶ」)
+LANG_TEMPLATES = {
+    "train": (
+        "Sweep the debris into the {color} square",
+        "Push the trash onto the {color} square",
+        "Clean the floor by sweeping the debris to the {color} area",
+    ),
+    "paraphrase": (
+        "Move all the litter to the {color} mat",
+        "Gather the dirt in the {color} region of the floor",
+    ),
+}
 
 # sim の articulation の関節の並び (観測の joint_pos と joint_vel の 9 次元)。PhysX が決める並びで、
 # action の並び (アームが先) とは違う。一致は sim の中のテストで確かめる (P2)

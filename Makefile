@@ -24,6 +24,9 @@ DAGGER_BETA ?= 0
 DATAGEN_SEED    ?=
 DATAGEN_DISTURB ?=
 DATAGEN_NOISE   ?=
+# Sweep のタスク (sweep-eval、datagen、dagger、sweep-replay、sweep-render)。S2 の言語で目標を選ぶタスクは
+# LeIsaac-LeKiwi-Sweep-Lang-v0 (docs/sweep.md の「言語で目標を選ぶ」)
+SWEEP_TASK      ?= LeIsaac-LeKiwi-Sweep-Floor-v0
 
 # --- sim の設定 (すべてのタスクで共通)。既定は VRAM 12GB 向けで、物理演算を CPU にし、
 # テクスチャストリーミングの予算 (VRAM に対する割合) を絞る。VRAM に余裕があれば .env で
@@ -57,6 +60,8 @@ EVAL_RANDOMIZE    ?=
 # どちらも評価用 (docs/sweep.md の「外乱と配置の型」)
 EVAL_DISTURB      ?=
 EVAL_LAYOUT       ?= default
+# 言語のタスクの sweep-eval の指示文の型。train (学習と同じ) か paraphrase (学習に使わない言い換え)
+EVAL_INSTRUCTIONS ?= train
 # sweep-replay で再生する評価 (data/sweep/eval/<EVAL_RUN>/ の状態の記録)。空なら DATASET の datagen の記録を再生する
 EVAL_RUN          ?=
 # sweep-render の動画の左上に出す見出し (例: "ACT (exp 10)")。英数字のみ (OpenCV の文字)
@@ -166,12 +171,12 @@ help:
 config:
 	@echo ".env: $(if $(wildcard .env),あり,なし)"
 	@echo "[対象と記録] TASK=$(TASK) DEVICE=$(DEVICE) DATASET=$(DATASET) RESUME=$(RESUME) FORCE=$(FORCE) LEADER_PORT=$(LEADER_PORT)"
-	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) DAGGER_BETA=$(DAGGER_BETA) DATAGEN_SEED=$(or $(DATAGEN_SEED),(現在時刻)) DATAGEN_DISTURB=$(or $(DATAGEN_DISTURB),(なし)) DATAGEN_NOISE=$(or $(DATAGEN_NOISE),(なし))"
+	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) DAGGER_BETA=$(DAGGER_BETA) DATAGEN_SEED=$(or $(DATAGEN_SEED),(現在時刻)) DATAGEN_DISTURB=$(or $(DATAGEN_DISTURB),(なし)) DATAGEN_NOISE=$(or $(DATAGEN_NOISE),(なし)) SWEEP_TASK=$(SWEEP_TASK)"
 	@echo "[sim]        SIM_DEVICE=$(SIM_DEVICE) TEX_BUDGET=$(or $(TEX_BUDGET),(Kit の既定 0.6))"
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
-	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 40 秒)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_DISTURB=$(or $(EVAL_DISTURB),(なし)) EVAL_LAYOUT=$(EVAL_LAYOUT) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
+	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 40 秒)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_DISTURB=$(or $(EVAL_DISTURB),(なし)) EVAL_LAYOUT=$(EVAL_LAYOUT) EVAL_INSTRUCTIONS=$(EVAL_INSTRUCTIONS) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
 	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
@@ -210,7 +215,7 @@ sweep-check:
 
 # Sweep タスクの評価。EVAL_POLICY=planner は計画器 (特権情報を使う)、remote は学習したポリシー (推論サーバを先に起動する)
 sweep-eval: $(if $(filter remote,$(EVAL_POLICY)),policy-up)
-	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(EVAL_TIME_LIMIT),--time_limit=$(EVAL_TIME_LIMIT)) $(if $(EVAL_RANDOMIZE),--randomize=$(EVAL_RANDOMIZE)) $(if $(EVAL_DISTURB),--disturb=$(EVAL_DISTURB)) --layout=$(EVAL_LAYOUT) $(if $(and $(DATAGEN_NOISE),$(filter planner,$(EVAL_POLICY))),--dart_noise=$(DATAGEN_NOISE)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
+	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --task=$(SWEEP_TASK) --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) --instructions=$(EVAL_INSTRUCTIONS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(EVAL_TIME_LIMIT),--time_limit=$(EVAL_TIME_LIMIT)) $(if $(EVAL_RANDOMIZE),--randomize=$(EVAL_RANDOMIZE)) $(if $(EVAL_DISTURB),--disturb=$(EVAL_DISTURB)) --layout=$(EVAL_LAYOUT) $(if $(and $(DATAGEN_NOISE),$(filter planner,$(EVAL_POLICY))),--dart_noise=$(DATAGEN_NOISE)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		$(if $(filter remote,$(EVAL_POLICY)),--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON)) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
@@ -221,7 +226,7 @@ datagen:
 		echo "[エラー] $(DATASET_PATH) は既にあります。別の名前 (DATASET=...) を指定してください"; exit 1; \
 	fi
 	@mkdir -p $(dir $(SIM_RECORD)) && printf 'SIM_DEVICE=%s\nTEX_BUDGET=%s\n' "$(SIM_DEVICE)" "$(TEX_BUDGET)" > $(SIM_RECORD)
-	$(call SIM_RUN,leisaac-datagen) /opt/tools/sweep_eval.py --policy=planner --record --dataset_file=$(DATASET_FILE) \
+	$(call SIM_RUN,leisaac-datagen) /opt/tools/sweep_eval.py --task=$(SWEEP_TASK) --policy=planner --record --dataset_file=$(DATASET_FILE) \
 		--num_demos=$(NUM) $(if $(DATAGEN_SEED),--seed=$(DATAGEN_SEED)) $(if $(DATAGEN_DISTURB),--disturb=$(DATAGEN_DISTURB)) $(if $(DATAGEN_NOISE),--dart_noise=$(DATAGEN_NOISE)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
 # DAgger のデータ。学習したポリシー (推論サーバ) で動かし、各フレームの計画器の action を正解として、すべてのラウンドを記録する
@@ -230,7 +235,7 @@ dagger: policy-up
 		echo "[エラー] $(DATASET_PATH) は既にあります。別の名前 (DATASET=...) を指定してください"; exit 1; \
 	fi
 	@mkdir -p $(dir $(SIM_RECORD)) && printf 'SIM_DEVICE=%s\nTEX_BUDGET=%s\n' "$(SIM_DEVICE)" "$(TEX_BUDGET)" > $(SIM_RECORD)
-	$(call SIM_RUN,leisaac-dagger) /opt/tools/sweep_eval.py --policy=remote --dagger --dagger_beta=$(DAGGER_BETA) --record \
+	$(call SIM_RUN,leisaac-dagger) /opt/tools/sweep_eval.py --task=$(SWEEP_TASK) --policy=remote --dagger --dagger_beta=$(DAGGER_BETA) --record \
 		--dataset_file=$(DATASET_FILE) --rounds=$(NUM) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
@@ -239,11 +244,11 @@ dagger: policy-up
 sweep-replay:
 ifeq ($(EVAL_RUN),)
 	$(check_sim_record)
-	$(call SIM_RUN,leisaac-sweep-replay) /opt/tools/sweep_replay.py --dataset_file=$(DATASET_FILE) \
+	$(call SIM_RUN,leisaac-sweep-replay) /opt/tools/sweep_replay.py --task=$(SWEEP_TASK) --dataset_file=$(DATASET_FILE) \
 		$(if $(EPISODES),--episodes $(EPISODES)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 else
 	@test -d data/sweep/eval/$(EVAL_RUN)/states || { echo "[エラー] data/sweep/eval/$(EVAL_RUN)/states がありません"; exit 1; }
-	$(call SIM_RUN,leisaac-sweep-replay) /opt/tools/sweep_replay.py --eval_dir=/workspace/data/sweep/eval/$(EVAL_RUN) \
+	$(call SIM_RUN,leisaac-sweep-replay) /opt/tools/sweep_replay.py --task=$(SWEEP_TASK) --eval_dir=/workspace/data/sweep/eval/$(EVAL_RUN) \
 		--out_dir=/workspace/data/sweep/eval/$(EVAL_RUN)/replay $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		$(if $(EPISODES),--episodes $(EPISODES)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 endif
@@ -252,7 +257,7 @@ endif
 sweep-render:
 	@test -n "$(EVAL_RUN)" || { echo "[エラー] EVAL_RUN=<日時> を指定してください (data/sweep/eval/<日時>/)"; exit 1; }
 	@test -d data/sweep/eval/$(EVAL_RUN)/states || { echo "[エラー] data/sweep/eval/$(EVAL_RUN)/states がありません"; exit 1; }
-	$(call SIM_RUN,leisaac-sweep-render) /opt/tools/sweep_render.py --eval_dir=/workspace/data/sweep/eval/$(EVAL_RUN) \
+	$(call SIM_RUN,leisaac-sweep-render) /opt/tools/sweep_render.py --task=$(SWEEP_TASK) --eval_dir=/workspace/data/sweep/eval/$(EVAL_RUN) \
 		$(if $(EPISODES),--rounds $(EPISODES)) $(if $(RENDER_TITLE),--title "$(RENDER_TITLE)") $(SIM_ARGS) --enable_cameras --headless
 
 # カメラの取り付けの候補を同じ場面で描き比べる (-> data/sweep/camera_probe/)。候補は tools/sweep_camera_probe.py の中

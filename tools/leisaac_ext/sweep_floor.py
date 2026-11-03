@@ -297,3 +297,36 @@ class SweepFloorEnvCfg(LeKiwiTaskEnvCfg):
                     terms[key] = term if name in names else None
         for key, term in terms.items():
             setattr(self.events, key, term)
+
+
+# ---- S2: 言語で目標を選ぶタスク LeIsaac-LeKiwi-Sweep-Lang-v0 (docs/sweep.md の「言語で目標を選ぶ」) ----
+# 目標領域と同じ大きさの正方形を 3 つ置き、指示文 (contract.LANG_TEMPLATES) で色を指定した 1 つを目標領域 (target) にする。
+# ほかの 2 つ (distractor_0、distractor_1) は見た目だけ。成功の判定、計画器、外乱は target だけを見る。
+# 色は、ゴミの色 (固定の色と、debris_color の範囲 b <= 0.35) から離す。名前は指示文に入る
+SQUARE_COLORS = {"blue": TARGET_COLOR, "white": (0.92, 0.92, 0.92), "purple": (0.60, 0.15, 0.80)}
+DISTRACTOR_NAMES = ("distractor_0", "distractor_1")
+# 配置の画角の条件。見直した後の front の半画角から余裕を引く (床のタスクは、配置をそろえるために見直す前の値のまま)
+LANG_MAX_BEARING = FRONT_HALF_FOV - 0.1
+
+
+@configclass
+class SweepLangSceneCfg(SweepFloorSceneCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        for name in DISTRACTOR_NAMES:
+            setattr(self, name, self.target.replace(prim_path=f"{{ENV_REGEX_NS}}/{name.capitalize()}"))
+
+
+@configclass
+class SweepLangEnvCfg(SweepFloorEnvCfg):
+    scene: SweepLangSceneCfg = SweepLangSceneCfg(num_envs=1, env_spacing=FLOOR_SIZE[0])
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.events.reset_layout.params.update(
+            max_bearing=LANG_MAX_BEARING,
+            target_clearance=0.03,
+            distractors=DISTRACTOR_NAMES,
+            square_colors=tuple(SQUARE_COLORS.values()),
+            num_candidates=1024,
+        )

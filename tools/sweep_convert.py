@@ -12,6 +12,7 @@
   エピソードの作り方は属性 source (sweep_eval.py が残す。planner、dart、dagger) で見分ける。source のない古い記録は、
   executed_actions があれば dagger、なければ planner とみなす。dagger のエピソードは actions が計画器の正解なので、
   失敗したラウンドも使う。それ以外 (planner、dart) は成功したものだけのはず
+- 指示文 (task) は、エピソードの属性 instruction (S2 の言語のタスク) を使う。属性がなければ contract.INSTRUCTION
 """
 import argparse
 import contextlib
@@ -71,15 +72,19 @@ with contextlib.ExitStack() as stack:
         assert not failed, f"{path}: 成功していないエピソードがある (datagen は成功したものだけを記録する): {failed[:5]}"
         groups += [data[n] for n in names]
         counts = {s: list(sources.values()).count(s) for s in sorted(set(sources.values()))}
-        print(f"{path}: {len(names)} episodes {counts} ({sum('disturb' in data[n].attrs for n in names)} with disturbance)", flush=True)
+        instructions = {str(data[n].attrs["instruction"]) for n in names if "instruction" in data[n].attrs}
+        print(f"{path}: {len(names)} episodes {counts} ({sum('disturb' in data[n].attrs for n in names)} with disturbance, "
+              f"{len(instructions)} distinct instructions)", flush=True)
 
     # robot_type は、実機の LeKiwi を lerobot で記録したときと同じ名前 (LeKiwiClient.name)
     dataset = LeRobotDataset.create(repo_id, contract.FPS, FEATURES, root=args.root, robot_type="lekiwi_client",
                                     image_writer_threads=8)
     for i, group in enumerate(groups):
         episode = load_episode(group)
+        # 指示文。言語のタスク (S2) はエピソードごとに違う。属性のない記録は固定の指示文
+        task = str(group.attrs.get("instruction", contract.INSTRUCTION))
         for t in range(len(episode["action"])):
-            dataset.add_frame({**{k: v[t] for k, v in episode.items()}, "task": contract.INSTRUCTION})
+            dataset.add_frame({**{k: v[t] for k, v in episode.items()}, "task": task})
         dataset.save_episode()
         print(f"episode {i}: {len(episode['action'])} frames ({time.time() - t0:.0f}s)", flush=True)
     dataset.finalize()

@@ -31,6 +31,12 @@ actions に記録する。実際に動かした action は executed_actions に�
 成功したエピソードだけを記録する (--record なしでは、揺らぎの大きさを決めるために成功率だけを測る)。
 --dart_noise 0 では、actions と executed_actions はビット単位で一致する。
 --record では、エピソードの属性 source (planner、dart、dagger) を HDF5 に残す (sweep_convert.py が読む)。
+S2 の言語で目標を選ぶタスク (LeIsaac-LeKiwi-Sweep-Lang-v0。正方形が 3 つ) では、ラウンドごとに指示文
+(contract.LANG_TEMPLATES[--instructions] の型に、目標領域の色を入れたもの) を作り、ポリシーに渡す。
+記録しないときは対にして評価する: ラウンド r は、配置の番号 r // 3 (env.reset(seed=配置のシード) で同じ配置を作り直す) で、
+r % 3 番の正方形を目標領域にする。指示文の型は配置の番号で順に回す。--record では、目標領域は一様に、型は
+np.random.default_rng([seed, ラウンド, 2]) で選び、エピソードの属性 instruction と goal_color に残す。
+行き先 (destination) は、ラウンドの終わりにゴミが最も多く入っていた正方形の色 (最大が DEST_MIN 個未満か、同数なら None)。
 """
 import argparse
 
@@ -57,6 +63,8 @@ parser.add_argument("--dagger", action="store_true", help="DAgger のデータ�
 parser.add_argument("--dagger_beta", type=float, default=0.0, help="--dagger で、chunk ごとに計画器の action で動かす確率")
 parser.add_argument("--dart_noise", type=float, default=None,
                     help="DART の揺らぎの大きさ (台車の並進の速度の標準偏差、m/s。--policy planner と一緒に使う)")
+parser.add_argument("--instructions", default="train", choices=["train", "paraphrase"],
+                    help="言語のタスクの指示文の型 (contract.LANG_TEMPLATES。paraphrase は学習に使わない言い換え。評価だけ)")
 parser.add_argument("--time_limit", type=float, default=None, help="1 ラウンドの制限時間 (秒。省略時はタスクの既定の 40 秒)")
 parser.add_argument("--videos", action="store_true", help="ラウンドごとの動画と overview.png を out_dir に残す")
 AppLauncher.add_app_launcher_args(parser)
@@ -78,6 +86,21 @@ from isaaclab_tasks.utils import parse_env_cfg
 
 import leisaac  # noqa: F401
 from leisaac_ext import broom, contract, disturb, remote, sweep_floor, sweep_log, sweep_mdp, sweep_planner, sweep_video
+
+# 言語のタスクの行き先: ゴミがこの個数以上入った正方形のうち、最も多いもの
+DEST_MIN = 3
+# 対にした評価で、ラウンドの初めに同じ配置で reset する回数 (前の場面の残像を消す)
+PAIRED_RESETS = 24
+
+
+def wilson(k: int, n: int, z: float = 1.96) -> list[float]:
+    """成功率 k / n の 95% 信頼区間 (Wilson)"""
+    if not n:
+        return [0.0, 0.0]
+    p = k / n
+    center = (p + z**2 / (2 * n)) / (1 + z**2 / n)
+    half = z * math.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / (1 + z**2 / n)
+    return [round(center - half, 3), round(center + half, 3)]
 
 
 class DartNoise:
@@ -154,6 +177,7 @@ class RemotePolicy:
         self.client = remote.PolicyClient(host, port, timeout_ms)
         self.server = self.client.call("ping")[0]
         self.horizon = horizon
+        self.task = contract.INSTRUCTION  # 言語のタスクでは、ラウンドごとに指示文に替える
 
     def reset(self) -> None:
         self.client.call("reset")
@@ -168,7 +192,7 @@ class RemotePolicy:
             image = obs[cam][0].cpu().numpy()
             assert image.shape == contract.IMAGE_SHAPE and image.dtype == np.uint8, f"{cam}: {image.shape} {image.dtype}"
             arrays[f"observation.images.{cam}"] = image
-        header, out = self.client.call("act", arrays, task=contract.INSTRUCTION, robot_type="lekiwi_client",
+        header, out = self.client.call("act", arrays, task=self.task, robot_type="lekiwi_client",
                                        horizon=self.horizon)
         self.infer_ms.append(header["infer_ms"])
         return out["action"]
@@ -217,6 +241,7 @@ assert not (args.record and args.layout != "default"), "--layout は --record �
 assert not (args.record and disturb_kinds and (disturb_kinds != ["spill"] or args.dagger)), \
     "--record と一緒に使える外乱は spill だけ (--dagger とは使えない)"
 source = "dagger" if args.dagger else "dart" if dart else "planner"
+assert not (args.record and args.instructions != "train"), "--record では学習用の指示文 (--instructions train) だけを使う"
 if args.record:
     assert args.dataset_file and args.dataset_file.endswith(".hdf5"), "--record には --dataset_file (.hdf5) が要る"
     # isaaclab の HDF5 の書き出しは、既存のファイルを上書きする
@@ -250,6 +275,18 @@ if args.randomize is not None:
     names = sweep_floor.ALL_RANDOMIZATION if args.randomize == "all" else [n for n in args.randomize.split(",") if n]
     cfg.set_randomization(names)
 env = gym.make(args.task, cfg=cfg).unwrapped
+# 言語のタスク (正方形が複数) か。正方形は target が先 (sweep_log.square_names)
+squares = sweep_log.square_names(env)
+lang = len(squares) > 1
+color_names = list(sweep_floor.SQUARE_COLORS)
+paired = lang and not args.record
+templates = contract.LANG_TEMPLATES[args.instructions]
+assert not paired or max_rounds % len(squares) == 0, f"対にした評価のラウンドの数は {len(squares)} の倍数にする"
+
+
+def layout_seed(layout_index: int) -> int:
+    """対にした評価で、配置 layout_index を作り直すときの env.reset のシード"""
+    return int(np.random.SeedSequence([seed, layout_index]).generate_state(1)[0])
 # 計画器の IK (calibrate_arm) は関節の状態を書き換える。その後の reset で元に戻る
 env.reset()
 if args.policy == "planner":
@@ -273,7 +310,9 @@ sweep_log.write_run(out_dir, env, {"task": args.task, "seed": seed, "args": vars
                                                 # sim の action (frame/action) の並び (lekiwi-leader の構成)
                                                 "sim_action": [*contract.ARM_JOINTS, "base_vx_world", "base_vy_world", "base_vtheta"],
                                                 "action_names": list(contract.ACTION_NAMES), "cameras": list(contract.CAMERAS),
-                                                "instruction": contract.INSTRUCTION},
+                                                "instruction": list(templates) if lang else contract.INSTRUCTION},
+                                   "lang": {"squares": squares, "colors": sweep_floor.SQUARE_COLORS, "instructions": args.instructions,
+                                            "paired": paired, "dest_min": DEST_MIN} if lang else None,
                                    "task_constants": {"target_half": sweep_mdp.TARGET_HALF, "success_count": sweep_mdp.SUCCESS_COUNT,
                                                       "in_target_max_z": sweep_mdp.IN_TARGET_MAX_Z}})
 round_log = sweep_log.RoundLog(env)
@@ -300,6 +339,25 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
     for r in range(max_rounds):
         if args.record and not args.dagger and n_ok >= args.num_demos:
             break
+        lang_info = {}
+        if lang:
+            if paired:
+                env.sweep_goal_override = r % len(squares)
+                # 同じシードで PAIRED_RESETS 回 reset する。reset の後の画像には、前の場面の残像が残る (RTX の描画が前のフレームを
+                # 蓄積し、reset は 1 回だけ描画する) ので、同じ場面を重ねて描き、指示だけが違うラウンドの最初の画像をそろえる
+                for _ in range(PAIRED_RESETS):
+                    obs, _ = env.reset(seed=layout_seed(r // len(squares)))
+                template = (r // len(squares)) % len(templates)
+                lang_info["layout_index"] = r // len(squares)
+            else:
+                template = int(np.random.default_rng([seed, r, 2]).integers(len(templates)))
+            # 正方形の色 (target、distractor の順) と、目標領域にした正方形の番号 (配置の中の番号)
+            square_colors = [color_names[c] for c in env.sweep_squares["colors"]]
+            instruction = templates[template].format(color=square_colors[0])
+            lang_info.update(instruction=instruction, goal_color=square_colors[0], goal_square=env.sweep_squares["goal"],
+                             template=template)
+            if args.policy == "remote":
+                policy.task = instruction
         policy.reset()
         if dart:
             policy.noise.reset(seed, r)
@@ -345,6 +403,8 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     # step の後は自動でリセットされるので、終わる前の個数を残しておく
                     inside = sweep_mdp.debris_in_target(env)[0]
                     count = int(inside.sum())
+                    if lang:
+                        square_counts = [count] + [int(sweep_mdp.debris_in_target(env, n)[0].sum()) for n in squares[1:]]
                     state = sweep_planner.read_state(env)
                     base_min_dist = min(base_min_dist, float(np.linalg.norm(state.debris - state.base, axis=-1).min()))
                     if steps % contract.SIM_STEPS_PER_FRAME == 0:
@@ -373,6 +433,12 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     break
         if success:
             count = max(count, sweep_mdp.SUCCESS_COUNT)
+        if lang:
+            square_counts[0] = count
+            top = max(square_counts)
+            dest = square_colors[square_counts.index(top)] if top >= DEST_MIN and square_counts.count(top) == 1 else None
+            lang_info.update(square_counts=dict(zip(square_colors, square_counts)), destination=dest,
+                             correct=dest == square_colors[0])
         if args.videos:
             video.close()
             os.rename(video.path, f"{out_dir}/videos/round_{r:03d}_{'success' if success else 'failure'}.mp4")
@@ -381,10 +447,11 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         disturb_info = dist.info if dist else {}
         round_log.save(f"{out_dir}/states/round_{r:03d}.npz",
                        {"round": r, "success": success, "in_target": count, "steps": steps, "seed": seed,
-                        "layout": args.layout, "layout_violation": layout_violation, **disturb_info})
+                        "layout": args.layout, "layout_violation": layout_violation, **disturb_info,
+                        **{k: v for k, v in lang_info.items() if k != "square_counts"}})
         result = {"round": r, "success": success, "in_target": count, "sim_time": round(steps * env.step_dt, 2),
                   "base_min_dist": round(base_min_dist, 3), "view_fraction": round(view_frames / max(pending_frames, 1), 3),
-                  "layout_violation": layout_violation, **disturb_info,
+                  "layout_violation": layout_violation, **disturb_info, **lang_info,
                   "states": f"states/round_{r:03d}.npz", "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
         if args.dagger:
@@ -407,21 +474,22 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                 group.attrs["dart_noise"] = args.dart_noise
             if dist:
                 group.attrs["disturb"] = json.dumps(dist.info)
+            if lang:
+                group.attrs["instruction"] = lang_info["instruction"]
+                group.attrs["goal_color"] = lang_info["goal_color"]
         results.append(result)
         log.write(json.dumps(result) + "\n")
         log.flush()
         print(f"round {r}: {'success' if success else 'failure'} in_target={count} sim_time={result['sim_time']}s "
               f"base_min_dist={result['base_min_dist']:.3f}m view={result['view_fraction']:.2f} " + " ".join(f"{k}={v}" for k, v in policy.info().items())
               + (f" disturb={dist.kind}{'' if dist.info['disturb_applied'] else '(not applied)'}" if dist else "")
+              + (f" goal={lang_info['goal_color']} dest={lang_info['destination']} counts={lang_info['square_counts']}" if lang else "")
               + f" ({n_ok}/{len(results)})", flush=True)
 
 n, n_ok = len(results), sum(x["success"] for x in results)
-# 成功率の 95% 信頼区間 (Wilson)
-p, z = n_ok / max(n, 1), 1.96
-center = (p + z**2 / (2 * n)) / (1 + z**2 / n) if n else 0.0
-half = z * math.sqrt(p * (1 - p) / n + z**2 / (4 * n**2)) / (1 + z**2 / n) if n else 0.0
+p = n_ok / max(n, 1)
 summary = {"task": args.task, "policy": args.policy, "seed": seed, "rounds": n, "success": n_ok,
-           "success_rate": round(p, 3), "ci95": [round(center - half, 3), round(center + half, 3)],
+           "success_rate": round(p, 3), "ci95": wilson(n_ok, n),
            "mean_in_target": round(float(np.mean([x["in_target"] for x in results])), 2) if n else 0.0,
            "mean_sim_time_success": round(float(np.mean([x["sim_time"] for x in results if x["success"]])), 2) if n_ok else None,
            # 台車がゴミに当たった (台車の中心から最も近いゴミまでが、外形の半径未満の) ラウンドの数
@@ -435,6 +503,17 @@ for kind in disturb_kinds:
     rows = [x for x in results if x["disturb"] == kind]
     # 種類ごとの [成功, ラウンド, 外乱が起きたラウンド]
     summary[f"disturb_{kind}"] = [sum(x["success"] for x in rows), len(rows), sum(x["disturb_applied"] for x in rows)]
+if lang:
+    n_correct = sum(x["correct"] for x in results)
+    summary.update(instructions=args.instructions, paired=paired, correct=n_correct,
+                   correct_rate=round(n_correct / max(n, 1), 3), correct_ci95=wilson(n_correct, n),
+                   destination_none=sum(x["destination"] is None for x in results))
+    if paired:
+        # 配置ごとの、指示どおりの行き先になった数 (0〜正方形の数) の分布
+        per_layout = {}
+        for x in results:
+            per_layout[x["layout_index"]] = per_layout.get(x["layout_index"], 0) + x["correct"]
+        summary["correct_per_layout"] = [list(per_layout.values()).count(c) for c in range(len(squares) + 1)]
 if args.policy == "remote":
     # ping は、ここまでの推論サーバの VRAM のピークも返す
     summary.update(action_horizon=args.action_horizon, server=policy.client.call("ping")[0])
