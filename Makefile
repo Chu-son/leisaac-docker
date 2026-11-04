@@ -16,6 +16,8 @@ NUM         ?= 50
 EPISODES    ?=
 # convert で変換する記録 (data/datasets/<名前>.hdf5。空白区切りで複数なら順につなぐ)。既定は DATASET
 CONVERT_FROM ?= $(DATASET)
+# convert で、指示した色の one-hot を observation.environment_state に入れるか (1 で入れる。S2g の目標の番号を入れた ACT)
+CONVERT_GOAL ?=
 # dagger で、chunk ごとに計画器の action で動かす確率 (0 なら学習したポリシーだけで動かす)
 DAGGER_BETA ?= 0
 # datagen の乱数のシード (空なら現在時刻。評価のシードとは別にする)、外乱 (spill だけ使える。こぼしを拾い直すデモ)、
@@ -171,7 +173,7 @@ help:
 config:
 	@echo ".env: $(if $(wildcard .env),あり,なし)"
 	@echo "[対象と記録] TASK=$(TASK) DEVICE=$(DEVICE) DATASET=$(DATASET) RESUME=$(RESUME) FORCE=$(FORCE) LEADER_PORT=$(LEADER_PORT)"
-	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) DAGGER_BETA=$(DAGGER_BETA) DATAGEN_SEED=$(or $(DATAGEN_SEED),(現在時刻)) DATAGEN_DISTURB=$(or $(DATAGEN_DISTURB),(なし)) DATAGEN_NOISE=$(or $(DATAGEN_NOISE),(なし)) SWEEP_TASK=$(SWEEP_TASK)"
+	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) CONVERT_GOAL=$(or $(CONVERT_GOAL),(なし)) DAGGER_BETA=$(DAGGER_BETA) DATAGEN_SEED=$(or $(DATAGEN_SEED),(現在時刻)) DATAGEN_DISTURB=$(or $(DATAGEN_DISTURB),(なし)) DATAGEN_NOISE=$(or $(DATAGEN_NOISE),(なし)) SWEEP_TASK=$(SWEEP_TASK)"
 	@echo "[sim]        SIM_DEVICE=$(SIM_DEVICE) TEX_BUDGET=$(or $(TEX_BUDGET),(Kit の既定 0.6))"
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
@@ -276,7 +278,7 @@ convert:
 	fi
 	@for d in $(CONVERT_FROM); do [ -e "data/datasets/$$d.hdf5" ] || { echo "[エラー] data/datasets/$$d.hdf5 がありません"; exit 1; }; done
 	$(call TRAIN_RUN,leisaac-convert) /opt/tools/sweep_convert.py --dataset_file $(foreach d,$(CONVERT_FROM),/workspace/data/datasets/$(d).hdf5) \
-		--root=/workspace/data/lerobot/$(DATASET)
+		--root=/workspace/data/lerobot/$(DATASET) $(if $(CONVERT_GOAL),--goal)
 
 # LeRobot 形式のデータでポリシーを学習する。上書きも再開もしない (docs/sweep.md の「学習」)
 train:

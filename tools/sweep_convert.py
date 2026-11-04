@@ -13,6 +13,8 @@
   executed_actions があれば dagger、なければ planner とみなす。dagger のエピソードは actions が計画器の正解なので、
   失敗したラウンドも使う。それ以外 (planner、dart) は成功したものだけのはず
 - 指示文 (task) は、エピソードの属性 instruction (S2 の言語のタスク) を使う。属性がなければ contract.INSTRUCTION
+- --goal は、エピソードの属性 goal_color (指示した色) を one-hot (contract.goal_onehot) にして、contract.GOAL_KEY に入れる
+  (S2g の目標の番号を入れた ACT。docs/sweep.md の「今後」)。すべてのエピソードに goal_color があること
 """
 import argparse
 import contextlib
@@ -34,6 +36,7 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.R
 parser.add_argument("--dataset_file", required=True, nargs="+", help="変換する HDF5 (複数なら順につなぐ)")
 parser.add_argument("--root", required=True, help="LeRobot 形式の出力先 (既にあれば止める)")
 parser.add_argument("--repo_id", default=None, help="データセットの名前 (省略時は local/<root の最後の名前>)")
+parser.add_argument("--goal", action="store_true", help="指示した色の one-hot を contract.GOAL_KEY に入れる")
 args = parser.parse_args()
 repo_id = args.repo_id or f"local/{os.path.basename(os.path.normpath(args.root))}"
 assert not os.path.exists(args.root), f"{args.root} は既にあります (上書きも追記もしない)"
@@ -44,6 +47,8 @@ FEATURES = {
     **{f"observation.images.{cam}": {"dtype": "video", "shape": contract.IMAGE_SHAPE, "names": ["height", "width", "channels"]}
        for cam in contract.CAMERAS},
 }
+if args.goal:
+    FEATURES[contract.GOAL_KEY] = {"dtype": "float32", "shape": (len(contract.GOAL_COLORS),), "names": list(contract.GOAL_COLORS)}
 
 
 def episode_source(group: h5py.Group) -> str:
@@ -57,7 +62,10 @@ def load_episode(group: h5py.Group) -> dict:
     state, action = contract.to_lerobot(group["obs/joint_pos"][:][idx], group["obs/joint_vel"][:][idx], group["actions"][:][idx])
     # gzip の塊ごとに展開されるので、1 フレームずつではなく、まとめて読む
     images = {cam: group[f"obs/{cam}"][:][idx] for cam in contract.CAMERAS}
-    return {"observation.state": state, "action": action, **{f"observation.images.{cam}": images[cam] for cam in contract.CAMERAS}}
+    episode = {"observation.state": state, "action": action, **{f"observation.images.{cam}": images[cam] for cam in contract.CAMERAS}}
+    if args.goal:
+        episode[contract.GOAL_KEY] = np.tile(contract.goal_onehot(str(group.attrs["goal_color"])), (len(idx), 1))
+    return episode
 
 
 t0 = time.time()
@@ -70,6 +78,9 @@ with contextlib.ExitStack() as stack:
         sources = {n: episode_source(data[n]) for n in names}
         failed = [n for n in names if not data[n].attrs.get("success") and sources[n] != "dagger"]
         assert not failed, f"{path}: 成功していないエピソードがある (datagen は成功したものだけを記録する): {failed[:5]}"
+        if args.goal:
+            missing = [n for n in names if "goal_color" not in data[n].attrs]
+            assert not missing, f"{path}: --goal なのに goal_color のないエピソードがある: {missing[:5]}"
         groups += [data[n] for n in names]
         counts = {s: list(sources.values()).count(s) for s in sorted(set(sources.values()))}
         instructions = {str(data[n].attrs["instruction"]) for n in names if "instruction" in data[n].attrs}
@@ -103,7 +114,7 @@ with contextlib.ExitStack() as stack:
         decoded = {cam: [] for cam in contract.CAMERAS}
         for t in range(end - start):
             frame = loaded[start + t]
-            for key in ("observation.state", "action"):
+            for key in ("observation.state", "action") + ((contract.GOAL_KEY,) if args.goal else ()):
                 if not np.array_equal(frame[key].numpy(), episode[key][t]):
                     problems.append(f"episode {i} frame {t}: {key} が一致しない")
             for cam in contract.CAMERAS:

@@ -34,6 +34,17 @@ LANG_TEMPLATES = {
         "Gather the dirt in the {color} region of the floor",
     ),
 }
+# S2g (目標の番号を入れた ACT): 指示した色を one-hot にして、指示文の代わりに GOAL_KEY でポリシーに渡す。
+# 並びは sweep_floor.SQUARE_COLORS と同じ (sweep_eval.py で確かめる)
+GOAL_COLORS = ("blue", "white", "purple")
+GOAL_KEY = "observation.environment_state"
+
+
+def goal_onehot(color: str) -> np.ndarray:
+    """指示した色の one-hot ([3] float32、GOAL_COLORS の並び)"""
+    onehot = np.zeros(len(GOAL_COLORS), dtype=np.float32)
+    onehot[GOAL_COLORS.index(color)] = 1.0
+    return onehot
 
 # sim の articulation の関節の並び (観測の joint_pos と joint_vel の 9 次元)。PhysX が決める並びで、
 # action の並び (アームが先) とは違う。一致は sim の中のテストで確かめる (P2)

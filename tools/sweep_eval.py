@@ -178,6 +178,9 @@ class RemotePolicy:
         self.server = self.client.call("ping")[0]
         self.horizon = horizon
         self.task = contract.INSTRUCTION  # 言語のタスクでは、ラウンドごとに指示文に替える
+        # 目標の番号を入れたポリシー (S2g) は、指示文の代わりに、指示した色の one-hot を受け取る。ラウンドごとに色を入れる
+        self.uses_goal = contract.GOAL_KEY in self.server.get("input_features", ())
+        self.goal_color = None
 
     def reset(self) -> None:
         self.client.call("reset")
@@ -188,6 +191,8 @@ class RemotePolicy:
         joint_vel = obs["joint_vel"][0].cpu().numpy().astype(np.float64)
         state, _ = contract.to_lerobot(joint_pos, joint_vel, np.zeros(len(contract.ACTION_NAMES)))
         arrays = {"observation.state": state}
+        if self.uses_goal:
+            arrays[contract.GOAL_KEY] = contract.goal_onehot(self.goal_color)
         for cam in contract.CAMERAS:
             image = obs[cam][0].cpu().numpy()
             assert image.shape == contract.IMAGE_SHAPE and image.dtype == np.uint8, f"{cam}: {image.shape} {image.dtype}"
@@ -279,6 +284,7 @@ env = gym.make(args.task, cfg=cfg).unwrapped
 squares = sweep_log.square_names(env)
 lang = len(squares) > 1
 color_names = list(sweep_floor.SQUARE_COLORS)
+assert tuple(color_names) == contract.GOAL_COLORS, f"contract.GOAL_COLORS {contract.GOAL_COLORS} が正方形の色 {color_names} と違う"
 paired = lang and not args.record
 templates = contract.LANG_TEMPLATES[args.instructions]
 assert not paired or max_rounds % len(squares) == 0, f"対にした評価のラウンドの数は {len(squares)} の倍数にする"
@@ -295,6 +301,7 @@ if args.policy == "planner":
 else:
     policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon)
     print(f"policy=remote seed={seed} action_horizon={args.action_horizon} server={policy.server}", flush=True)
+    assert lang or not policy.uses_goal, f"指示した色を入力にするポリシー ({contract.GOAL_KEY}) は、言語のタスクでだけ評価できる"
 expert = PlannerPolicy(env) if args.dagger else None
 policy_info = {"type": args.policy}
 if args.policy == "remote":
@@ -357,7 +364,7 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
             lang_info.update(instruction=instruction, goal_color=square_colors[0], goal_square=env.sweep_squares["goal"],
                              template=template)
             if args.policy == "remote":
-                policy.task = instruction
+                policy.task, policy.goal_color = instruction, square_colors[0]
         policy.reset()
         if dart:
             policy.noise.reset(seed, r)

@@ -56,6 +56,8 @@ info = {
     "checkpoint": os.path.basename(os.path.realpath(os.path.dirname(args.policy_path))),
     "chunk_size": getattr(cfg, "chunk_size", None),
     "n_action_steps": getattr(cfg, "n_action_steps", None),
+    # ポリシーが受け取る観測のキー。sweep_eval.py は、contract.GOAL_KEY があるときだけ指示した色の one-hot を送る
+    "input_features": sorted(cfg.input_features),
     "load_s": round(time.time() - t0, 1),
     "vram_mib": round(torch.cuda.max_memory_allocated() / 2**20) if device.type == "cuda" else None,
 }
