@@ -15,6 +15,8 @@
 - 指示文 (task) は、エピソードの属性 instruction (S2 の言語のタスク) を使う。属性がなければ contract.INSTRUCTION
 - --goal は、エピソードの属性 goal_color (指示した色) を one-hot (contract.goal_onehot) にして、contract.GOAL_KEY に入れる
   (S2g の目標の番号を入れた ACT。docs/sweep.md の「今後」)。すべてのエピソードに goal_color があること
+- --start_copies K は、すべてのエピソードの最初の START_S 秒を、短いエピソードとして K 回ずつ後ろに足す。
+  目標で行き先が分かれるのはエピソードの始めだけなので、その場面を学習で多く見せる (S2g の 2 回目)
 """
 import argparse
 import contextlib
@@ -31,12 +33,16 @@ from leisaac_ext import contract
 
 # 動画の圧縮による画素の値 (0〜255) の平均絶対誤差の上限。AV1 (crf 30) の実測は 1〜2 程度 (docs/sweep.md)
 MAX_IMAGE_MAE = 4.0
+# --start_copies で複製する、エピソードの始めの長さ (秒)。台車は約 1 秒で動き出す。1 秒の時点の action chunk
+# (ACT は 100 フレーム) が収まる長さにする
+START_S = 4.0
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("--dataset_file", required=True, nargs="+", help="変換する HDF5 (複数なら順につなぐ)")
 parser.add_argument("--root", required=True, help="LeRobot 形式の出力先 (既にあれば止める)")
 parser.add_argument("--repo_id", default=None, help="データセットの名前 (省略時は local/<root の最後の名前>)")
 parser.add_argument("--goal", action="store_true", help="指示した色の one-hot を contract.GOAL_KEY に入れる")
+parser.add_argument("--start_copies", type=int, default=0, help="エピソードの最初の START_S 秒を、短いエピソードとして足す回数")
 args = parser.parse_args()
 repo_id = args.repo_id or f"local/{os.path.basename(os.path.normpath(args.root))}"
 assert not os.path.exists(args.root), f"{args.root} は既にあります (上書きも追記もしない)"
@@ -56,12 +62,15 @@ def episode_source(group: h5py.Group) -> str:
     return str(group.attrs.get("source", "dagger" if "executed_actions" in group else "planner"))
 
 
-def load_episode(group: h5py.Group) -> dict:
-    """エピソードを 30fps のフレームにする。値は LeRobot 形式 (state、action は [T, 9]、画像は [T, 240, 320, 3] uint8)"""
-    idx = contract.frame_indices(len(group["actions"]))
-    state, action = contract.to_lerobot(group["obs/joint_pos"][:][idx], group["obs/joint_vel"][:][idx], group["actions"][:][idx])
+def load_episode(group: h5py.Group, frames: int | None = None) -> dict:
+    """エピソードを 30fps のフレームにする。値は LeRobot 形式 (state、action は [T, 9]、画像は [T, 240, 320, 3] uint8)。
+    frames を渡すと、最初の frames フレームだけにする"""
+    idx = contract.frame_indices(len(group["actions"]))[:frames]
+    end = int(idx[-1]) + 1
+    state, action = contract.to_lerobot(group["obs/joint_pos"][:end][idx], group["obs/joint_vel"][:end][idx],
+                                        group["actions"][:end][idx])
     # gzip の塊ごとに展開されるので、1 フレームずつではなく、まとめて読む
-    images = {cam: group[f"obs/{cam}"][:][idx] for cam in contract.CAMERAS}
+    images = {cam: group[f"obs/{cam}"][:end][idx] for cam in contract.CAMERAS}
     episode = {"observation.state": state, "action": action, **{f"observation.images.{cam}": images[cam] for cam in contract.CAMERAS}}
     if args.goal:
         episode[contract.GOAL_KEY] = np.tile(contract.goal_onehot(str(group.attrs["goal_color"])), (len(idx), 1))
@@ -87,11 +96,16 @@ with contextlib.ExitStack() as stack:
         print(f"{path}: {len(names)} episodes {counts} ({sum('disturb' in data[n].attrs for n in names)} with disturbance, "
               f"{len(instructions)} distinct instructions)", flush=True)
 
+    # 書き出すエピソード (記録のエピソードと、使うフレームの数。None はすべて)。--start_copies の複製は後ろに並べる
+    segments = [(g, None) for g in groups] + [(g, round(START_S * contract.FPS)) for _ in range(args.start_copies) for g in groups]
+    if args.start_copies:
+        print(f"start copies: {args.start_copies} x {len(groups)} episodes x {round(START_S * contract.FPS)} frames", flush=True)
+
     # robot_type は、実機の LeKiwi を lerobot で記録したときと同じ名前 (LeKiwiClient.name)
     dataset = LeRobotDataset.create(repo_id, contract.FPS, FEATURES, root=args.root, robot_type="lekiwi_client",
                                     image_writer_threads=8)
-    for i, group in enumerate(groups):
-        episode = load_episode(group)
+    for i, (group, frames) in enumerate(segments):
+        episode = load_episode(group, frames)
         # 指示文。言語のタスク (S2) はエピソードごとに違う。属性のない記録は固定の指示文
         task = str(group.attrs.get("instruction", contract.INSTRUCTION))
         for t in range(len(episode["action"])):
@@ -103,10 +117,10 @@ with contextlib.ExitStack() as stack:
 
     # 読み直して、すべてのフレームを HDF5 と比べる
     loaded = LeRobotDataset(repo_id, root=args.root)
-    assert loaded.num_episodes == len(groups), f"エピソードの数が違う: {loaded.num_episodes} != {len(groups)}"
+    assert loaded.num_episodes == len(segments), f"エピソードの数が違う: {loaded.num_episodes} != {len(segments)}"
     problems, image_mae = [], {cam: [] for cam in contract.CAMERAS}
-    for i, group in enumerate(groups):
-        episode = load_episode(group)
+    for i, (group, frames) in enumerate(segments):
+        episode = load_episode(group, frames)
         start, end = loaded.meta.episodes["dataset_from_index"][i], loaded.meta.episodes["dataset_to_index"][i]
         if end - start != len(episode["action"]):
             problems.append(f"episode {i}: フレームの数が違う ({end - start} != {len(episode['action'])})")
@@ -137,7 +151,7 @@ with contextlib.ExitStack() as stack:
             problems.append(f"{cam}: 画像の平均絶対誤差の最大が {max(image_mae[cam]):.2f} (上限 {MAX_IMAGE_MAE})")
 
 summary = {
-    "dataset_file": args.dataset_file, "root": args.root, "repo_id": repo_id, "episodes": loaded.num_episodes,
+    "dataset_file": args.dataset_file, "root": args.root, "goal": args.goal, "start_copies": args.start_copies, "repo_id": repo_id, "episodes": loaded.num_episodes,
     "frames": loaded.num_frames, "fps": contract.FPS, "convert_s": round(convert_s), "total_s": round(time.time() - t0),
     "image_mae": {cam: {"mean": round(float(np.mean(v)), 3), "max": round(float(np.max(v)), 3)} for cam, v in image_mae.items()},
     "problems": problems,
