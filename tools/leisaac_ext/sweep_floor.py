@@ -328,5 +328,7 @@ class SweepLangEnvCfg(SweepFloorEnvCfg):
             target_clearance=0.03,
             distractors=DISTRACTOR_NAMES,
             square_colors=tuple(SQUARE_COLORS.values()),
-            num_candidates=1024,
+            # 正方形が 3 つだと条件をすべて満たす候補がまれで、1024 では計画器の言語の確認用の 39/90 ラウンドが
+            # わずかに条件を外れた (2026-11-04)。候補を増やす (条件を満たす最初の候補を使うので、分布は偏らない)
+            num_candidates=4096,
         )
