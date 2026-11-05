@@ -9,7 +9,8 @@ npz のキー:
                 (env.reset_to にそのまま渡せる)。見た目と物理のランダム化の値 (照明、ゴミの色・質量・摩擦、
                 カメラの取り付けの姿勢) も入る。capture_setup / apply_setup
     frame/...   30fps のフレームごとの値 (先頭の次元がフレーム)。観測を取った時点の状態と、その後に実行した action。
-                位置は env の原点から (m)、姿勢は四元数 (w, x, y, z)。カメラの姿勢は opengl の向き (-z が視線)
+                位置は env の原点から (m)、姿勢は四元数 (w, x, y, z)。カメラの姿勢は opengl の向き (-z が視線)。
+                障害物のあるタスク (S3a) は、障害物の姿勢 (obstacle_pos、obstacle_quat) も入る
     meta/...    ラウンドの番号と結果
 最後のフレームの action の後の状態 (ラウンドの終わり) は、自動リセットで消えるので残らない。
 読むだけなら isaaclab は要らない (load_round、load_run)。書く関数は env を受け取り、isaaclab は関数の中で import する。
@@ -24,6 +25,8 @@ import time
 import numpy as np
 
 FORMAT_VERSION = 1
+# 障害物の名前 (sweep_floor.OBSTACLE_NAME と同じ。sweep_floor は isaaclab を import するので、ここでは読まない)
+OBSTACLE_NAME = "obstacle"
 
 
 def _np(x) -> np.ndarray:
@@ -267,6 +270,7 @@ class RoundLog:
         robot = env.scene["robot"]
         self.i_base = robot.body_names.index("base")
         self.debris = _debris_names(env)
+        self.obstacle = OBSTACLE_NAME in env.scene.rigid_objects
         self.cameras = {name: robot.body_names.index(_camera_parent(env.scene[name])) for name in camera_names(env)}
 
     def begin(self) -> None:
@@ -296,6 +300,9 @@ class RoundLog:
             "debris_quat": torch.stack([env.scene[n].data.root_quat_w[e] for n in self.debris]),
             "action": action,
         }
+        if self.obstacle:
+            row["obstacle_pos"] = env.scene[OBSTACLE_NAME].data.root_pos_w[e] - origin
+            row["obstacle_quat"] = env.scene[OBSTACLE_NAME].data.root_quat_w[e]
         for name, i in self.cameras.items():
             local_pos = torch.as_tensor(self.local[name][0], device=body_pos.device)
             local_quat = torch.as_tensor(self.local[name][1], device=body_pos.device)

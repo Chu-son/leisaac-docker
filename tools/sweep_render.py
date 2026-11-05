@@ -84,8 +84,8 @@ def place_overview(base_xy: np.ndarray, debris_xy: np.ndarray, target_xy: np.nda
                                        torch.tensor([[*center, 0.0]], dtype=torch.float32, device=dev) + origin)
 
 
-def put_state(joint_pos: torch.Tensor, debris_pos: torch.Tensor, debris_quat: torch.Tensor) -> None:
-    """記録した 1 フレームの状態を書き戻す (速度は 0、関節の目標は今の位置)"""
+def put_state(joint_pos: torch.Tensor, debris_pos: torch.Tensor, debris_quat: torch.Tensor, obstacle_pose: torch.Tensor | None = None) -> None:
+    """記録した 1 フレームの状態を書き戻す (速度は 0、関節の目標は今の位置)。obstacle_pose は障害物の位置と姿勢 [7]"""
     zeros = torch.zeros_like(joint_pos)[None]
     robot.write_joint_state_to_sim(joint_pos[None], zeros)
     robot.set_joint_position_target(joint_pos[None])
@@ -93,6 +93,10 @@ def put_state(joint_pos: torch.Tensor, debris_pos: torch.Tensor, debris_quat: to
     for i, name in enumerate(sweep_mdp.DEBRIS_NAMES):
         env.scene[name].write_root_pose_to_sim(torch.cat([debris_pos[i] + origin, debris_quat[i]])[None])
         env.scene[name].write_root_velocity_to_sim(torch.zeros(1, 6, device=dev))
+    if obstacle_pose is not None:
+        obstacle = env.scene[sweep_log.OBSTACLE_NAME]
+        obstacle.write_root_pose_to_sim(torch.cat([obstacle_pose[:3] + origin, obstacle_pose[3:]])[None])
+        obstacle.write_root_velocity_to_sim(torch.zeros(1, 6, device=dev))
     env.scene.write_data_to_sim()
 
 
@@ -131,6 +135,9 @@ def render_round(r: int) -> str:
     jp = torch.as_tensor(data["frame/joint_pos"], device=dev)
     dpos = torch.as_tensor(data["frame/debris_pos"], device=dev)
     dquat = torch.as_tensor(data["frame/debris_quat"], device=dev)
+    # 障害物の姿勢 (S3a より前の記録にはない。そのときは初めの位置のまま)
+    opose = (torch.as_tensor(np.concatenate([data["frame/obstacle_pos"], data["frame/obstacle_quat"]], axis=-1), device=dev)
+             if "frame/obstacle_pos" in data else None)
     base_xy, debris_xy = data["frame/base_pos"][:, :2], data["frame/debris_pos"][..., :2]
     target_xy = data["setup/init/rigid_object/target/root_pose"][:2]
     place_overview(base_xy, debris_xy.reshape(-1, 2), target_xy)
@@ -142,7 +149,7 @@ def render_round(r: int) -> str:
     n = len(jp)
     for t in range(n):
         for _ in range(STEPS_PER_FRAME):
-            put_state(jp[t], dpos[t], dquat[t])
+            put_state(jp[t], dpos[t], dquat[t], None if opose is None else opose[t])
             env.sim.step(render=True)
             env.scene.update(env.physics_dt)
         main = grab("overview").copy()

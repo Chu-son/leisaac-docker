@@ -29,7 +29,7 @@ DATAGEN_SEED    ?=
 DATAGEN_DISTURB ?=
 DATAGEN_NOISE   ?=
 # Sweep のタスク (sweep-eval、datagen、dagger、sweep-replay、sweep-render)。S2 の言語で目標を選ぶタスクは
-# LeIsaac-LeKiwi-Sweep-Lang-v0 (docs/sweep.md の「言語で目標を選ぶ」)
+# LeIsaac-LeKiwi-Sweep-Lang-v0 (docs/sweep.md の「言語で目標を選ぶ」)、S3a の障害物のタスクは LeIsaac-LeKiwi-Sweep-Obstacle-v0 (同じく「障害物」)
 SWEEP_TASK      ?= LeIsaac-LeKiwi-Sweep-Floor-v0
 
 # --- sim の設定 (すべてのタスクで共通)。既定は VRAM 12GB 向けで、物理演算を CPU にし、

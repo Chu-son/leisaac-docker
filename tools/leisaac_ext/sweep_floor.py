@@ -332,3 +332,47 @@ class SweepLangEnvCfg(SweepFloorEnvCfg):
             # わずかに条件を外れた (2026-11-04)。候補を増やす (条件を満たす最初の候補を使うので、分布は偏らない)
             num_candidates=4096,
         )
+
+
+# ---- S3a: 障害物のタスク LeIsaac-LeKiwi-Sweep-Obstacle-v0 (docs/sweep.md の「障害物」) ----
+# 床のタスクに箱を 1 つ足す。箱は剛体で、ゴミ (5〜10g) では動かないが、台車が当たると動く重さにする
+# (評価で、箱が動いた距離を当たった目安にする)。配置の型は sweep_mdp.OBSTACLE_MODES
+OBSTACLE_NAME = "obstacle"
+OBSTACLE_SIZE = (0.30, 0.18, 0.12)
+OBSTACLE_MASS = 5.0
+OBSTACLE_COLOR = (0.35, 0.20, 0.12)
+OBSTACLE_MATERIAL = sim_utils.RigidBodyMaterialCfg(static_friction=0.8, dynamic_friction=0.7)
+# 箱をゴミと目標領域の間に置けるように、目標領域をゴミのまとまりから遠くに置く
+OBSTACLE_TARGET_DISTANCE = (0.75, 1.0)
+
+
+@configclass
+class SweepObstacleSceneCfg(SweepFloorSceneCfg):
+    obstacle: RigidObjectCfg = RigidObjectCfg(
+        prim_path="{ENV_REGEX_NS}/Obstacle",
+        spawn=sim_utils.CuboidCfg(
+            size=OBSTACLE_SIZE,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(max_depenetration_velocity=1.0),
+            mass_props=sim_utils.MassPropertiesCfg(mass=OBSTACLE_MASS),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=OBSTACLE_COLOR),
+            physics_material=OBSTACLE_MATERIAL,
+        ),
+        # 実際の位置はリセットのたびに sweep_mdp.reset_layout が決める
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(1.5, 3.0, OBSTACLE_SIZE[2] / 2)),
+    )
+
+
+@configclass
+class SweepObstacleEnvCfg(SweepFloorEnvCfg):
+    scene: SweepObstacleSceneCfg = SweepObstacleSceneCfg(num_envs=1, env_spacing=FLOOR_SIZE[0])
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.events.reset_layout.params.update(
+            target_distance=OBSTACLE_TARGET_DISTANCE,
+            # 画角の条件は、言語のタスクと同じく、見直した後の front の半画角から余裕を引いた値
+            max_bearing=LANG_MAX_BEARING,
+            obstacle=OBSTACLE_NAME,
+            num_candidates=4096,
+        )

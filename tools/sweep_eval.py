@@ -91,6 +91,11 @@ from leisaac_ext import broom, contract, disturb, remote, sweep_floor, sweep_log
 DEST_MIN = 3
 # 対にした評価で、ラウンドの初めに同じ配置で reset する回数 (前の場面の残像を消す)
 PAIRED_RESETS = 24
+# ラウンドの初めに、物理を進めずに描き直す回数。reset は 1 回だけ描くので、最初の画像に前の場面が残る (RTX の描画が
+# 前のフレームを蓄積する)。datagen の記録 (reset を重ねると記録が壊れる) を含め、すべてのラウンドで描き直す (2026-11-05)
+SETTLE_RENDERS = 24
+# 障害物のタスクで、箱がこれ以上 (m) 動いたら、当たったとみなす
+OBSTACLE_MOVED = 0.01
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> list[float]:
@@ -206,6 +211,17 @@ class RemotePolicy:
         return {"chunks": len(self.infer_ms), "infer_ms": round(float(np.mean(self.infer_ms)), 1) if self.infer_ms else None}
 
 
+def settle_render(env) -> dict:
+    """物理を進めずに SETTLE_RENDERS 回描き直し、観測を作り直す (前の場面の残像を消す)。記録の最初のフレームは
+    env.obs_buf から取られる (step の前) ので、ここで作り直した観測が記録される。物理の状態と乱数は変えない"""
+    for _ in range(SETTLE_RENDERS):
+        env.sim.render()
+    for cam in contract.CAMERAS:
+        env.scene[cam]._is_outdated[:] = True  # 次に data を読むとき、描き直した画像を取り込む
+    env.obs_buf = env.observation_manager.compute()
+    return env.obs_buf
+
+
 class ExpertActionsRecorder(RecorderTerm):
     """--dagger、--dart_noise: actions に、実際に動かした action ではなく、計画器の (揺らぎのない) action (env.expert_action) を記録する"""
 
@@ -286,6 +302,8 @@ lang = len(squares) > 1
 color_names = list(sweep_floor.SQUARE_COLORS)
 assert tuple(color_names) == contract.GOAL_COLORS, f"contract.GOAL_COLORS {contract.GOAL_COLORS} が正方形の色 {color_names} と違う"
 paired = lang and not args.record
+# 障害物のタスク (S3a) か
+obstacle = sweep_floor.OBSTACLE_NAME in env.scene.rigid_objects
 templates = contract.LANG_TEMPLATES[args.instructions]
 assert not paired or max_rounds % len(squares) == 0, f"対にした評価のラウンドの数は {len(squares)} の倍数にする"
 
@@ -365,6 +383,7 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                              template=template)
             if args.policy == "remote":
                 policy.task, policy.goal_color = instruction, square_colors[0]
+        obs = settle_render(env)
         policy.reset()
         if dart:
             policy.noise.reset(seed, r)
@@ -375,6 +394,11 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         # 台車の中心から最も近いゴミまでの距離の、ラウンド中の最小値。台車の外形の半径
         # (sweep_planner.BASE_RADIUS) より小さければ、ゴミに当たったか、台車の下にくぐらせている
         base_min_dist = math.inf
+        # 障害物のタスク (S3a): 箱が最初の位置から動いた距離の最大と、台車の中心から箱の外形までの距離の最小
+        obstacle_info = {}
+        if obstacle:
+            box_start = env.scene[sweep_floor.OBSTACLE_NAME].data.root_pos_w[0, :2].clone()
+            obstacle_info = {"obstacle_mode": env.sweep_obstacle["mode"], "obstacle_moved": 0.0, "base_obstacle_min_dist": math.inf}
         # 押し終わっていないゴミが front カメラの画角に入っていたフレームの数と、押し終わっていないゴミがあったフレームの数
         view_frames, pending_frames = 0, 0
         # 使った配置の違反の値 (0 なら配置の条件をすべて満たす。sweep_mdp.reset_layout)
@@ -414,6 +438,11 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                         square_counts = [count] + [int(sweep_mdp.debris_in_target(env, n)[0].sum()) for n in squares[1:]]
                     state = sweep_planner.read_state(env)
                     base_min_dist = min(base_min_dist, float(np.linalg.norm(state.debris - state.base, axis=-1).min()))
+                    if obstacle:
+                        moved = float((env.scene[sweep_floor.OBSTACLE_NAME].data.root_pos_w[0, :2] - box_start).norm())
+                        obstacle_info["obstacle_moved"] = max(obstacle_info["obstacle_moved"], moved)
+                        obstacle_info["base_obstacle_min_dist"] = min(
+                            obstacle_info["base_obstacle_min_dist"], float(np.linalg.norm(state.obstacles - state.base, axis=-1).min()))
                     if steps % contract.SIM_STEPS_PER_FRAME == 0:
                         in_view = pending_in_view(state)
                         if in_view is not None:
@@ -429,7 +458,7 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                         # 観測 (カメラ) は、この step を実行する前の状態のもの。図も同じ時点の真値で描く
                         base_path.append(state.base)
                         last = (state.debris, debris_start, inside.cpu().numpy(), state.target, np.array(base_path), state.theta)
-                        map_img = sweep_video.draw_map(*last, f"#{r} t={steps * env.step_dt:4.1f}s in={count}")
+                        map_img = sweep_video.draw_map(*last, f"#{r} t={steps * env.step_dt:4.1f}s in={count}", obstacles=state.obstacles)
                         video.write(*(obs["policy"][cam][0].cpu().numpy() for cam in contract.CAMERAS), map_img)
                     obs, _, terminated, truncated, _ = env.step(sim_action)
                     steps += 1
@@ -450,15 +479,17 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
             video.close()
             os.rename(video.path, f"{out_dir}/videos/round_{r:03d}_{'success' if success else 'failure'}.mp4")
             # 最後に描いたフレームの状態に、ラウンドの結果を書き添える (自動リセットの後は、終わりの状態を読めない)
-            maps.append(sweep_video.draw_map(*last, f"#{r} {'S' if success else 'F'} {steps * env.step_dt:.1f}s in={count}"))
+            maps.append(sweep_video.draw_map(*last, f"#{r} {'S' if success else 'F'} {steps * env.step_dt:.1f}s in={count}",
+                                             obstacles=state.obstacles))
         disturb_info = dist.info if dist else {}
         round_log.save(f"{out_dir}/states/round_{r:03d}.npz",
                        {"round": r, "success": success, "in_target": count, "steps": steps, "seed": seed,
-                        "layout": args.layout, "layout_violation": layout_violation, **disturb_info,
+                        "layout": args.layout, "layout_violation": layout_violation, **disturb_info, **obstacle_info,
                         **{k: v for k, v in lang_info.items() if k != "square_counts"}})
         result = {"round": r, "success": success, "in_target": count, "sim_time": round(steps * env.step_dt, 2),
                   "base_min_dist": round(base_min_dist, 3), "view_fraction": round(view_frames / max(pending_frames, 1), 3),
                   "layout_violation": layout_violation, **disturb_info, **lang_info,
+                  **{k: round(v, 3) if isinstance(v, float) else v for k, v in obstacle_info.items()},
                   "states": f"states/round_{r:03d}.npz", "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
         if args.dagger:
@@ -521,6 +552,12 @@ if lang:
         for x in results:
             per_layout[x["layout_index"]] = per_layout.get(x["layout_index"], 0) + x["correct"]
         summary["correct_per_layout"] = [list(per_layout.values()).count(c) for c in range(len(squares) + 1)]
+if obstacle:
+    # 箱が OBSTACLE_MOVED 以上動いたラウンド (台車、アーム、穂のどれかが当たった) の数と、型ごとの [成功, ラウンド]
+    summary["obstacle_contact_rounds"] = sum(x["obstacle_moved"] >= OBSTACLE_MOVED for x in results)
+    for mode in sweep_mdp.OBSTACLE_MODES:
+        rows = [x for x in results if x["obstacle_mode"] == mode]
+        summary[f"obstacle_{mode}"] = [sum(x["success"] for x in rows), len(rows)]
 if args.policy == "remote":
     # ping は、ここまでの推論サーバの VRAM のピークも返す
     summary.update(action_horizon=args.action_horizon, server=policy.client.call("ping")[0])

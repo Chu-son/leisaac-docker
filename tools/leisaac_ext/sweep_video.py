@@ -25,7 +25,7 @@ def to_px(xy: np.ndarray) -> np.ndarray:
 
 
 def draw_map(debris: np.ndarray, debris_start: np.ndarray, inside: np.ndarray, target: np.ndarray,
-             base_path: np.ndarray, theta: float, label: str) -> np.ndarray:
+             base_path: np.ndarray, theta: float, label: str, obstacles: np.ndarray | None = None) -> np.ndarray:
     """上から見た図 (RGB)。debris と debris_start は [N, 2]、inside は [N] (目標領域に入ったか)、base_path は台車の通り道 [T, 2]
     (最後が今の位置)。目標領域は青、ゴミは目標領域の中なら緑、外なら赤、最初の位置は灰色の点、台車の通り道は黄色"""
     img = np.full((*MAP_SIZE, 3), 245, np.uint8)
@@ -35,6 +35,9 @@ def draw_map(debris: np.ndarray, debris_start: np.ndarray, inside: np.ndarray, t
         cv2.line(img, tuple(to_px(np.array([MAP_X[0], v]))), tuple(to_px(np.array([MAP_X[1], v]))), (225, 225, 225), 1)
     lo, hi = to_px(target + [-TARGET_HALF, TARGET_HALF]), to_px(target + [TARGET_HALF, -TARGET_HALF])
     cv2.rectangle(img, tuple(lo), tuple(hi), (150, 180, 255), -1)
+    if obstacles is not None and len(obstacles):
+        # 障害物の箱 (外形の点を結んだ多角形、茶色)
+        cv2.fillPoly(img, [to_px(obstacles)], (140, 90, 60))
     cv2.polylines(img, [to_px(base_path)], False, (230, 190, 0), 1)
     center = to_px(base_path[-1])
     cv2.circle(img, tuple(center), round(BASE_RADIUS * MAP_SCALE), (120, 120, 120), 1)
