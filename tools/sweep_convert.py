@@ -15,6 +15,7 @@
 - 指示文 (task) は、エピソードの属性 instruction (S2 の言語のタスク) を使う。属性がなければ contract.INSTRUCTION
 - --goal は、エピソードの属性 goal_color (指示した色) を one-hot (contract.goal_onehot) にして、contract.GOAL_KEY に入れる
   (S2g の目標の番号を入れた ACT。docs/sweep.md の「今後」)。すべてのエピソードに goal_color があること
+- 障害物のタスク (S3a) で、箱に当たったエピソード (属性 obstacle_moved が contract.OBSTACLE_MOVED 以上) は使わない
 - --start_copies K は、すべてのエピソードの最初の START_S 秒を、短いエピソードとして K 回ずつ後ろに足す。
   目標で行き先が分かれるのはエピソードの始めだけなので、その場面を学習で多く見せる (S2g の 2 回目)
 """
@@ -80,6 +81,7 @@ def load_episode(group: h5py.Group, frames: int | None = None) -> dict:
 t0 = time.time()
 with contextlib.ExitStack() as stack:
     groups = []  # すべてのファイルのエピソード (h5py.Group) を順に並べたもの
+    skipped_obstacle = 0  # 箱に当たったので使わないエピソードの数
     for path in args.dataset_file:
         data = stack.enter_context(h5py.File(path, "r"))["data"]
         names = [f"demo_{i}" for i in range(len(data))]
@@ -90,7 +92,11 @@ with contextlib.ExitStack() as stack:
         if args.goal:
             missing = [n for n in names if "goal_color" not in data[n].attrs]
             assert not missing, f"{path}: --goal なのに goal_color のないエピソードがある: {missing[:5]}"
-        groups += [data[n] for n in names]
+        hit_box = [n for n in names if float(data[n].attrs.get("obstacle_moved", 0.0)) >= contract.OBSTACLE_MOVED]
+        if hit_box:
+            print(f"{path}: 箱に当たった {len(hit_box)} エピソードを使わない: {hit_box[:10]}", flush=True)
+        skipped_obstacle += len(hit_box)
+        groups += [data[n] for n in names if n not in hit_box]
         counts = {s: list(sources.values()).count(s) for s in sorted(set(sources.values()))}
         instructions = {str(data[n].attrs["instruction"]) for n in names if "instruction" in data[n].attrs}
         print(f"{path}: {len(names)} episodes {counts} ({sum('disturb' in data[n].attrs for n in names)} with disturbance, "
@@ -151,7 +157,7 @@ with contextlib.ExitStack() as stack:
             problems.append(f"{cam}: 画像の平均絶対誤差の最大が {max(image_mae[cam]):.2f} (上限 {MAX_IMAGE_MAE})")
 
 summary = {
-    "dataset_file": args.dataset_file, "root": args.root, "goal": args.goal, "start_copies": args.start_copies, "repo_id": repo_id, "episodes": loaded.num_episodes,
+    "dataset_file": args.dataset_file, "root": args.root, "goal": args.goal, "start_copies": args.start_copies, "skipped_obstacle": skipped_obstacle, "repo_id": repo_id, "episodes": loaded.num_episodes,
     "frames": loaded.num_frames, "fps": contract.FPS, "convert_s": round(convert_s), "total_s": round(time.time() - t0),
     "image_mae": {cam: {"mean": round(float(np.mean(v)), 3), "max": round(float(np.max(v)), 3)} for cam, v in image_mae.items()},
     "problems": problems,

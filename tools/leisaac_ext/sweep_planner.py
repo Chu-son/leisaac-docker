@@ -220,6 +220,7 @@ class Pass:
     covered: int  # この掃きで目標領域に入る見込みのゴミの数
     goal: np.ndarray | None = None  # 押す先の正方形の中心 (目標領域か、中継点)。経路は goal を基準にする
     blocked: bool = False  # 通り道が障害物にかかる
+    hit: bool = False  # 台車が、まっすぐ押されないゴミを轢く見込み
 
     @property
     def normal(self) -> np.ndarray:
@@ -242,14 +243,16 @@ class PassParams:
 
 
 def choose_pass(state: SweepState, tip: np.ndarray, params: PassParams = PassParams(), goal: np.ndarray | None = None,
-                done: np.ndarray | None = None) -> Pass | None:
+                done: np.ndarray | None = None, box_first: bool = False) -> Pass | None:
     """次の掃きを選ぶ (押し終わっていないゴミがなければ None)
 
     候補は、押し終わっていないゴミそれぞれから目標領域の中心への向きと、横のずれ params.laterals の組。
     台車がゴミを轢かない候補のうち、目標領域に入る見込みのゴミが最も多く、掃く距離が最も短いものを選ぶ。
     tip は押し当てた姿勢の穂先の位置 (台車の座標系、ArmPoses.tip)。
     障害物があれば、通り道 (台車の後ろの端から、押したゴミがたまる穂先の前まで、台車の左の端から穂の右の端までの
-    長方形) が箱の外形の点にかかる候補を、ほかのどの候補より後にする (blocked)。
+    長方形) が箱の外形の点にかかる候補を blocked とする。箱にかからずゴミも轢かない候補を最も先にし、次にゴミを轢かない
+    候補 (箱にかかるなら、SweepPlanner._choose が中継点へ押す) を先にする。box_first なら、箱にかからない候補を先にする
+    (中継点がないとき。ゴミを轢いても、箱は押さない)。
     goal を与えると、目標領域の代わりに goal (中継点) を中心とする同じ大きさの正方形へ押す。done (ゴミごと) が真の
     ゴミは、押し終わったものとする。
     """
@@ -287,9 +290,13 @@ def choose_pass(state: SweepState, tip: np.ndarray, params: PassParams = PassPar
                                 & (o_lat < c + BRUSH_HALF_WIDTH + OBSTACLE_MARGIN)
                                 & (o_along > start - tip[1] - APPROACH - BASE_RADIUS - OBSTACLE_MARGIN)
                                 & (o_along < params.end + 2 * DEBRIS_HALF + 0.05 + OBSTACLE_MARGIN)).any())
-            key = (not blocked, not hit.any(), int(covered.sum()), -(params.end - start))
+            # 箱がなければ前と同じ順 (blocked は常に偽)
+            if box_first:
+                key = (not blocked, not hit.any(), int(covered.sum()), -(params.end - start))
+            else:
+                key = (not (blocked or hit.any()), not hit.any(), not blocked, int(covered.sum()), -(params.end - start))
             if best_key is None or key > best_key:
-                best, best_key = Pass(d, c, start, params.end, int(covered.sum()), t.copy(), blocked), key
+                best, best_key = Pass(d, c, start, params.end, int(covered.sum()), t.copy(), blocked, bool(hit.any())), key
     return best
 
 
@@ -310,12 +317,13 @@ def choose_via(state: SweepState, tip: np.ndarray, params: PassParams, pending: 
             length = np.linalg.norm(via - center) + np.linalg.norm(state.target - via)
             if length >= best_len or (np.abs(via - state.target) < 2 * sweep_mdp.TARGET_HALF).all():
                 continue
-            first = choose_pass(state, tip, params, goal=via, done=~pending)
+            first = choose_pass(state, tip, params, goal=via, done=~pending, box_first=True)
             if first is None or first.blocked:
                 continue
             gathered = state.debris.copy()
             gathered[pending] = via + VIA_SPREAD * (state.debris[pending] - center)
-            second = choose_pass(SweepState(gathered, state.target, state.base, state.theta, state.arm, state.obstacles), tip, params)
+            second = choose_pass(SweepState(gathered, state.target, state.base, state.theta, state.arm, state.obstacles), tip, params,
+                                 box_first=True)
             if second is None or second.blocked:
                 continue
             best, best_len = via, length
@@ -504,15 +512,15 @@ class SweepPlanner:
         if self.via is None:
             self.via = choose_via(state, self.poses.tip, self.params, pending)
         if self.via is None:
-            return p
+            return choose_pass(state, self.poses.tip, self.params, box_first=True)
         # 中継点に集めたゴミは、1 段目では押し終わったものとする。すべて集まったら、中継点から目標領域へ押す
         done = ~pending | in_target(state.debris, self.via, self.params.done_margin)
-        q = choose_pass(state, self.poses.tip, self.params, goal=self.via, done=done)
+        q = choose_pass(state, self.poses.tip, self.params, goal=self.via, done=done, box_first=True)
         if q is None:
             # 中継点に集まった。目標領域へ押す掃き (通り道は空いているはず) を、中継点を忘れて選び直す
             self.via = None
-            return p
-        return q if not q.blocked else p
+            return p if not p.blocked else choose_pass(state, self.poses.tip, self.params, box_first=True)
+        return q if not q.blocked else choose_pass(state, self.poses.tip, self.params, box_first=True)
 
     def _obstacle_nodes(self, state: SweepState, clearance: float) -> tuple[np.ndarray, ...]:
         """箱のまわりを回る経由点 (plan_route の extra_nodes)"""

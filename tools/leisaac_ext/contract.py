@@ -38,6 +38,9 @@ LANG_TEMPLATES = {
 # 並びは sweep_floor.SQUARE_COLORS と同じ (sweep_eval.py で確かめる)
 GOAL_COLORS = ("blue", "white", "purple")
 GOAL_KEY = "observation.environment_state"
+# S3a (障害物): 箱がこれ以上 (m) 動いたら、当たったとみなす。datagen はエピソードの属性 obstacle_moved に動いた距離を残し、
+# 当たったエピソードは数に入れない。変換 (sweep_convert.py) は、当たったエピソードを使わない (箱をよけるデモだけにする)
+OBSTACLE_MOVED = 0.01
 
 
 def goal_onehot(color: str) -> np.ndarray:

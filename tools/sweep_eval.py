@@ -20,6 +20,7 @@ front カメラの水平の画角に入っていたフレームの割合 (ゴミ
 並べた 30fps の実時間) と、全ラウンドの終わりの図を並べた overview.png も残す (leisaac_ext.sweep_video)。
 --record を付けると、成功したエピソードだけを HDF5 に記録する (isaaclab の RecorderManager。上流の teleop と同じ形式)。
 成功が num_demos 個になるか、ラウンドが rounds (既定は num_demos の 2 倍 + 10) に達したら終わる。
+障害物のタスクでは、箱に当たった成功 (contract.OBSTACLE_MOVED) も記録するが、数には入れない (変換で除く)。
 --dagger (--policy remote と --record と一緒に使う) は DAgger のデータを作る。学習したポリシーの action で動かし
 (chunk ごとに確率 dagger_beta で計画器の action で動かす)、各フレームで計画器が出した action を正解として
 actions に記録する。実際に動かした action は executed_actions に残す。成功も失敗も、すべてのラウンドを記録する。
@@ -94,8 +95,7 @@ PAIRED_RESETS = 24
 # ラウンドの初めに、物理を進めずに描き直す回数。reset は 1 回だけ描くので、最初の画像に前の場面が残る (RTX の描画が
 # 前のフレームを蓄積する)。datagen の記録 (reset を重ねると記録が壊れる) を含め、すべてのラウンドで描き直す (2026-11-05)
 SETTLE_RENDERS = 24
-# 障害物のタスクで、箱がこれ以上 (m) 動いたら、当たったとみなす
-OBSTACLE_MOVED = 0.01
+OBSTACLE_MOVED = contract.OBSTACLE_MOVED
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> list[float]:
@@ -357,12 +357,13 @@ if args.dagger:
 results = []
 start = time.time()
 n_ok = 0
+n_clean = 0  # 成功して、箱に当たらなかったラウンド (障害物のタスクの datagen は、これが num_demos になるまで続ける)
 maps = []
 if args.videos:
     os.makedirs(f"{out_dir}/videos", exist_ok=True)
 with open(f"{out_dir}/rounds.jsonl", "w") as log:
     for r in range(max_rounds):
-        if args.record and not args.dagger and n_ok >= args.num_demos:
+        if args.record and not args.dagger and n_clean >= args.num_demos:
             break
         lang_info = {}
         if lang:
@@ -492,6 +493,7 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                   **{k: round(v, 3) if isinstance(v, float) else v for k, v in obstacle_info.items()},
                   "states": f"states/round_{r:03d}.npz", "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
+        n_clean += success and not (obstacle and obstacle_info["obstacle_moved"] >= OBSTACLE_MOVED)
         if args.dagger:
             # すべてのラウンドを記録する (HDF5 の demo_<ラウンドの番号>)
             exported = (env.recorder_manager.exported_successful_episode_count
@@ -512,6 +514,8 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                 group.attrs["dart_noise"] = args.dart_noise
             if dist:
                 group.attrs["disturb"] = json.dumps(dist.info)
+            if obstacle:
+                group.attrs["obstacle_moved"] = obstacle_info["obstacle_moved"]
             if lang:
                 group.attrs["instruction"] = lang_info["instruction"]
                 group.attrs["goal_color"] = lang_info["goal_color"]
@@ -562,7 +566,7 @@ if args.policy == "remote":
     # ping は、ここまでの推論サーバの VRAM のピークも返す
     summary.update(action_horizon=args.action_horizon, server=policy.client.call("ping")[0])
 if args.record:
-    summary.update(dataset_file=args.dataset_file, num_demos=n if args.dagger else n_ok,
+    summary.update(dataset_file=args.dataset_file, num_demos=n if args.dagger else n_ok, num_clean=n_clean,
                    dataset_bytes=os.path.getsize(args.dataset_file) if os.path.exists(args.dataset_file) else 0)
 if args.record:
     summary.update(source=source)
