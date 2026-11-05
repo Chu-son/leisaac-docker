@@ -246,7 +246,9 @@ DEFAULT_RANDOMIZATION = ("debris_color", "light", "camera")
 ALL_RANDOMIZATION = tuple(n for n in RANDOMIZATIONS if n != "light_wide")
 
 
-EPISODE_LENGTH_S = 40.0
+# 1 ラウンドの制限時間 (秒)。全タスク共通。障害物のタスク (S3a) の回り込みと 2 段の掃きは、計画器でも 60 秒近くかかる
+# (2026-11-05 に 40 秒から変えた。docs/sweep.md)
+EPISODE_LENGTH_S = 90.0
 
 
 @configclass

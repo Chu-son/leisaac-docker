@@ -54,7 +54,7 @@ EVAL_SEED         ?=
 # 1 なら sweep-eval がラウンドごとの動画 (videos/round_*.mp4) と overview.png を結果に残す
 # (状態の記録 states/round_*.npz は常に残る。動画は後から sweep-replay EVAL_RUN=... VIDEOS=1 でも作れる)
 EVAL_VIDEOS       ?= 0
-# sweep-eval の 1 ラウンドの制限時間 (秒)。空ならタスクの既定 (40 秒)。datagen と dagger には効かない
+# sweep-eval の 1 ラウンドの制限時間 (秒)。空ならタスクの既定 (90 秒)。datagen と dagger には効かない
 # (2026-11-01 より前の 25 秒の条件と比べるときに 25 を指定する)
 EVAL_TIME_LIMIT   ?=
 # sweep-eval の追加のランダム化の項目 (カンマ区切り。all ですべて)。空ならタスクの既定 (debris_color,light,camera)。
@@ -180,7 +180,7 @@ config:
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
-	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 40 秒)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_DISTURB=$(or $(EVAL_DISTURB),(なし)) EVAL_LAYOUT=$(EVAL_LAYOUT) EVAL_INSTRUCTIONS=$(EVAL_INSTRUCTIONS) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
+	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 90 秒)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_DISTURB=$(or $(EVAL_DISTURB),(なし)) EVAL_LAYOUT=$(EVAL_LAYOUT) EVAL_INSTRUCTIONS=$(EVAL_INSTRUCTIONS) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
 	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
