@@ -64,6 +64,8 @@ parser.add_argument("--dagger", action="store_true", help="DAgger のデータ�
 parser.add_argument("--dagger_beta", type=float, default=0.0, help="--dagger で、chunk ごとに計画器の action で動かす確率")
 parser.add_argument("--dart_noise", type=float, default=None,
                     help="DART の揺らぎの大きさ (台車の並進の速度の標準偏差、m/s。--policy planner と一緒に使う)")
+parser.add_argument("--via_overshoot", type=float, default=0.0,
+                    help="計画器が中継点へ押す掃きを、決めた位置よりこれだけ (m) 先まで押す (押しすぎに強い手本かの評価。--record とは使えない)")
 parser.add_argument("--instructions", default="train", choices=["train", "paraphrase"],
                     help="言語のタスクの指示文の型 (contract.LANG_TEMPLATES。paraphrase は学習に使わない言い換え。評価だけ)")
 parser.add_argument("--time_limit", type=float, default=None, help="1 ラウンドの制限時間 (秒。省略時はタスクの既定の 90 秒)")
@@ -147,10 +149,10 @@ class PlannerPolicy:
     """計画器を、ポリシーのインタフェースで包む。観測の代わりに sim の真値を読む。
     noise (DartNoise) を渡すと、揺らぎを足した action を返し、揺らぎのない action を clean_action に残す"""
 
-    def __init__(self, env, noise: "DartNoise | None" = None):
+    def __init__(self, env, noise: "DartNoise | None" = None, overshoot: float = 0.0):
         self.env = env
         self.poses = sweep_planner.calibrate_arm(env)
-        self.planner = sweep_planner.SweepPlanner(self.poses)
+        self.planner = sweep_planner.SweepPlanner(self.poses, overshoot=overshoot)
         self.noise = noise
         self.clean_action = None
 
@@ -259,6 +261,7 @@ dart = args.dart_noise is not None
 if dart:
     assert args.policy == "planner" and args.dart_noise >= 0, "--dart_noise (0 以上) は --policy planner と一緒に使う"
 assert not (args.record and args.layout != "default"), "--layout は --record と一緒に使えない"
+assert not (args.via_overshoot and (args.record or args.policy != "planner")), "--via_overshoot は計画器の評価だけで使う"
 assert not (args.record and disturb_kinds and (disturb_kinds != ["spill"] or args.dagger)), \
     "--record と一緒に使える外乱は spill だけ (--dagger とは使えない)"
 source = "dagger" if args.dagger else "dart" if dart else "planner"
@@ -314,7 +317,7 @@ def layout_seed(layout_index: int) -> int:
 # 計画器の IK (calibrate_arm) は関節の状態を書き換える。その後の reset で元に戻る
 env.reset()
 if args.policy == "planner":
-    policy = PlannerPolicy(env, DartNoise(args.dart_noise) if dart else None)
+    policy = PlannerPolicy(env, DartNoise(args.dart_noise) if dart else None, overshoot=args.via_overshoot)
     print(f"policy=planner seed={seed} dart_noise={args.dart_noise} brush tip (base frame)={policy.poses.tip.round(3).tolist()}", flush=True)
 else:
     policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon)
@@ -574,6 +577,8 @@ if args.dagger:
     summary.update(dagger=True, dagger_beta=args.dagger_beta)
 if dart:
     summary.update(dart_noise=args.dart_noise)
+if args.via_overshoot:
+    summary.update(via_overshoot=args.via_overshoot)
 if maps:
     cv2.imwrite(f"{out_dir}/overview.png", cv2.cvtColor(sweep_video.overview(maps), cv2.COLOR_RGB2BGR))
 with open(f"{out_dir}/summary.json", "w") as f:
