@@ -26,12 +26,20 @@ front カメラの水平の画角に入っていたフレームの割合 (ゴミ
 actions に記録する。実際に動かした action は executed_actions に残す。成功も失敗も、すべてのラウンドを記録する。
 計画器は台車の速度の指令を自分の前の指令から加速度の上限をかけて作るので、--dagger では毎フレーム、
 実際の台車の速度に合わせ直す (ポリシーが動かした後の状態から、どう立て直すかを正解にする)。
+--handover T0,T1 (--policy remote と --record と一緒に使う) は、引き継ぎ型の立て直しのデモを作る。ラウンドごとに
+T0〜T1 秒の一様な時刻 (np.random.default_rng([seed, ラウンド, 3])) まで学習したポリシーで動かし、その時刻の後の最初の
+chunk の区切りで、計画器を reset して (内部の状態を持たずに、その場の状態から計画し直させて) 最後まで動かす。
+計画器が動かした部分は、記録の action と計画器の action が一致する。引き継いだフレーム (30fps の番号) をエピソードの属性
+handover_frame に、計画器が reset の後の腕の初期化 (段階 init。止まって腕を移動の姿勢へ戻す) を終えたフレームを
+handover_start に残す (引き継ぐ前に終わったら、どちらも -1)。sweep_convert.py は handover_start より前を使わない
+(押している途中の場面に「止まる」正解を付けないため)。障害物のタスクでは、
+引き継いだ後に箱が動いた距離を obstacle_moved_handover に残し、数に入れるか (と変換で使うか) はこれで決める。
 --dart_noise (--policy planner と一緒に使う) は DART のデータを作る。計画器の action に揺らぎ (DartNoise) を
 足して動かし、揺らぎのない計画器の action を actions に、実際に動かした action を executed_actions に記録する。
 計画器の速度の指令は、毎フレーム、揺らぎを足した指令に合わせ直す (揺らいだ状態から計画器が出す action を正解にする)。
 成功したエピソードだけを記録する (--record なしでは、揺らぎの大きさを決めるために成功率だけを測る)。
 --dart_noise 0 では、actions と executed_actions はビット単位で一致する。
---record では、エピソードの属性 source (planner、dart、dagger) を HDF5 に残す (sweep_convert.py が読む)。
+--record では、エピソードの属性 source (planner、dart、dagger、handover) を HDF5 に残す (sweep_convert.py が読む)。
 S2 の言語で目標を選ぶタスク (LeIsaac-LeKiwi-Sweep-Lang-v0。正方形が 3 つ) では、ラウンドごとに指示文
 (contract.LANG_TEMPLATES[--instructions] の型に、目標領域の色を入れたもの) を作り、ポリシーに渡す。
 記録しないときは対にして評価する: ラウンド r は、配置の番号 r // 3 (env.reset(seed=配置のシード) で同じ配置を作り直す) で、
@@ -62,6 +70,8 @@ parser.add_argument("--dataset_file", default=None, help="記録先の HDF5 (--r
 parser.add_argument("--num_demos", type=int, default=50, help="記録する成功エピソードの数 (--record)")
 parser.add_argument("--dagger", action="store_true", help="DAgger のデータを作る (--policy remote と --record と一緒に使う)")
 parser.add_argument("--dagger_beta", type=float, default=0.0, help="--dagger で、chunk ごとに計画器の action で動かす確率")
+parser.add_argument("--handover", default=None,
+                    help="引き継ぎ型の立て直しのデモ。T0,T1 (秒) の一様な時刻に、学習したポリシーから計画器に引き継ぐ (--policy remote と --record と一緒に使う)")
 parser.add_argument("--dart_noise", type=float, default=None,
                     help="DART の揺らぎの大きさ (台車の並進の速度の標準偏差、m/s。--policy planner と一緒に使う)")
 parser.add_argument("--via_overshoot", type=float, default=0.0,
@@ -254,6 +264,10 @@ def pending_in_view(state: sweep_planner.SweepState) -> bool | None:
 seed = args.seed if args.seed is not None else int(time.time())
 if args.dagger:
     assert args.policy == "remote" and args.record, "--dagger は --policy remote と --record と一緒に使う"
+handover = [float(x) for x in args.handover.split(",")] if args.handover else None
+if handover:
+    assert args.policy == "remote" and args.record and not args.dagger, "--handover は --policy remote と --record と一緒に使う (--dagger とは使えない)"
+    assert len(handover) == 2 and 0 <= handover[0] <= handover[1], "--handover は T0,T1 (0 <= T0 <= T1、秒)"
 disturb_kinds = [k for k in (args.disturb or "").split(",") if k]
 assert not set(disturb_kinds) - set(disturb.KINDS), f"--disturb は {disturb.KINDS} から選ぶ"
 assert args.layout in sweep_floor.LAYOUTS, f"--layout は {sorted(sweep_floor.LAYOUTS)} から選ぶ"
@@ -264,7 +278,7 @@ assert not (args.record and args.layout != "default"), "--layout は --record �
 assert not (args.via_overshoot and (args.record or args.policy != "planner")), "--via_overshoot は計画器の評価だけで使う"
 assert not (args.record and disturb_kinds and (disturb_kinds != ["spill"] or args.dagger)), \
     "--record と一緒に使える外乱は spill だけ (--dagger とは使えない)"
-source = "dagger" if args.dagger else "dart" if dart else "planner"
+source = "dagger" if args.dagger else "handover" if handover else "dart" if dart else "planner"
 assert not (args.record and args.instructions != "train"), "--record では学習用の指示文 (--instructions train) だけを使う"
 if args.record:
     assert args.dataset_file and args.dataset_file.endswith(".hdf5"), "--record には --dataset_file (.hdf5) が要る"
@@ -323,7 +337,7 @@ else:
     policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon)
     print(f"policy=remote seed={seed} action_horizon={args.action_horizon} server={policy.server}", flush=True)
     assert lang or not policy.uses_goal, f"指示した色を入力にするポリシー ({contract.GOAL_KEY}) は、言語のタスクでだけ評価できる"
-expert = PlannerPolicy(env) if args.dagger else None
+expert = PlannerPolicy(env) if args.dagger or handover else None
 policy_info = {"type": args.policy}
 if args.policy == "remote":
     policy_info.update(server=policy.server, action_horizon=args.action_horizon)
@@ -394,6 +408,9 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         if expert:
             expert.reset()
         t0, steps, success, done = time.time(), 0, False, False
+        # 引き継ぐ時刻 (秒) と、引き継いだフレームの番号 (まだなら -1)
+        handover_s = float(np.random.default_rng([seed, r, 3]).uniform(*handover)) if handover else None
+        handover_frame = handover_start = -1
         count = int(sweep_mdp.debris_in_target(env)[0].sum())
         # 台車の中心から最も近いゴミまでの距離の、ラウンド中の最小値。台車の外形の半径
         # (sweep_planner.BASE_RADIUS) より小さければ、ゴミに当たったか、台車の下にくぐらせている
@@ -403,6 +420,8 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         if obstacle:
             box_start = env.scene[sweep_floor.OBSTACLE_NAME].data.root_pos_w[0, :2].clone()
             obstacle_info = {"obstacle_mode": env.sweep_obstacle["mode"], "obstacle_moved": 0.0, "base_obstacle_min_dist": math.inf}
+            if handover:
+                obstacle_info["obstacle_moved_handover"] = 0.0
         # 押し終わっていないゴミが front カメラの画角に入っていたフレームの数と、押し終わっていないゴミがあったフレームの数
         view_frames, pending_frames = 0, 0
         # 使った配置の違反の値 (0 なら配置の条件をすべて満たす。sweep_mdp.reset_layout)
@@ -414,12 +433,22 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
             video = sweep_video.VideoWriter(f"{out_dir}/videos/round_{r:03d}.mp4")
             debris_start, base_path = sweep_planner.read_state(env).debris, []
         while not done:
-            chunk = policy.act(obs["policy"])
-            use_expert = expert is not None and rng.random() < args.dagger_beta
+            if handover and handover_frame < 0 and steps * env.step_dt >= handover_s:
+                # 計画器に引き継ぐ。計画器は内部の状態を持たずに始め、速度の指令は実際の台車の速度から始める
+                handover_frame = steps // contract.SIM_STEPS_PER_FRAME
+                expert.reset()
+                expert.planner.vel = obs["policy"]["joint_vel"][0].cpu().numpy().astype(np.float64)[_BASE_IDX]
+                if obstacle:
+                    box_handover = env.scene[sweep_floor.OBSTACLE_NAME].data.root_pos_w[0, :2].clone()
+            if handover_frame >= 0 and handover_start < 0 and expert.planner.phase != "init":
+                handover_start = steps // contract.SIM_STEPS_PER_FRAME
+            # 引き継いだ後は、計画器が 1 フレームずつ action を出す
+            chunk = expert.act(obs["policy"]) if handover_frame >= 0 else policy.act(obs["policy"])
+            use_expert = args.dagger and rng.random() < args.dagger_beta
             for k, a in enumerate(chunk):
                 joint_pos = obs["policy"]["joint_pos"][0].cpu().numpy().astype(np.float64)
                 sim_action = torch.tensor(contract.from_lerobot_action(a, joint_pos), device=env.device)[None]
-                if expert:
+                if args.dagger:
                     # 計画器の速度の指令を、実際の台車の速度 (ワールド座標系) に合わせてから、正解の action を求める
                     expert.planner.vel = obs["policy"]["joint_vel"][0].cpu().numpy().astype(np.float64)[_BASE_IDX]
                     expert_action = torch.tensor(expert.planner.act(sweep_planner.read_state(env)), dtype=torch.float32,
@@ -445,6 +474,9 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     if obstacle:
                         moved = float((env.scene[sweep_floor.OBSTACLE_NAME].data.root_pos_w[0, :2] - box_start).norm())
                         obstacle_info["obstacle_moved"] = max(obstacle_info["obstacle_moved"], moved)
+                        if handover_frame >= 0:
+                            moved = float((env.scene[sweep_floor.OBSTACLE_NAME].data.root_pos_w[0, :2] - box_handover).norm())
+                            obstacle_info["obstacle_moved_handover"] = max(obstacle_info["obstacle_moved_handover"], moved)
                         obstacle_info["base_obstacle_min_dist"] = min(
                             obstacle_info["base_obstacle_min_dist"], float(np.linalg.norm(state.obstacles - state.base, axis=-1).min()))
                     if steps % contract.SIM_STEPS_PER_FRAME == 0:
@@ -452,7 +484,7 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                         if in_view is not None:
                             view_frames += in_view
                             pending_frames += 1
-                        extra = {"expert_action": env.expert_action[0]} if expert or dart else {}
+                        extra = {"expert_action": env.expert_action[0]} if args.dagger or dart else {}
                         if args.policy == "planner":  # 計画器の段階 (sweep_planner.PHASES の番号)
                             extra["planner_phase"] = np.int8(sweep_planner.PHASES.index(policy.planner.phase))
                         # in_view: 押し終わっていないゴミが front の画角に入っているか (1/0。押し終わっていなければ -1)
@@ -489,14 +521,20 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
         round_log.save(f"{out_dir}/states/round_{r:03d}.npz",
                        {"round": r, "success": success, "in_target": count, "steps": steps, "seed": seed,
                         "layout": args.layout, "layout_violation": layout_violation, **disturb_info, **obstacle_info,
+                        **({"handover_s": handover_s, "handover_frame": handover_frame, "handover_start": handover_start} if handover else {}),
                         **{k: v for k, v in lang_info.items() if k != "square_counts"}})
         result = {"round": r, "success": success, "in_target": count, "sim_time": round(steps * env.step_dt, 2),
                   "base_min_dist": round(base_min_dist, 3), "view_fraction": round(view_frames / max(pending_frames, 1), 3),
                   "layout_violation": layout_violation, **disturb_info, **lang_info,
+                  **({"handover_s": round(handover_s, 2), "handover_frame": handover_frame, "handover_start": handover_start} if handover else {}),
                   **{k: round(v, 3) if isinstance(v, float) else v for k, v in obstacle_info.items()},
                   "states": f"states/round_{r:03d}.npz", "wall_time": round(time.time() - t0, 1), **policy.info()}
         n_ok += success
-        n_clean += success and not (obstacle and obstacle_info["obstacle_moved"] >= OBSTACLE_MOVED)
+        if handover:
+            # 引き継いで、計画器が成功させたものだけを数える。箱は引き継いだ後に動いたかで見る
+            n_clean += success and handover_start >= 0 and not (obstacle and obstacle_info["obstacle_moved_handover"] >= OBSTACLE_MOVED)
+        else:
+            n_clean += success and not (obstacle and obstacle_info["obstacle_moved"] >= OBSTACLE_MOVED)
         if args.dagger:
             # すべてのラウンドを記録する (HDF5 の demo_<ラウンドの番号>)
             exported = (env.recorder_manager.exported_successful_episode_count
@@ -519,6 +557,12 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                 group.attrs["disturb"] = json.dumps(dist.info)
             if obstacle:
                 group.attrs["obstacle_moved"] = obstacle_info["obstacle_moved"]
+            if handover:
+                group.attrs["handover_frame"] = handover_frame
+                group.attrs["handover_start"] = handover_start
+                group.attrs["handover_s"] = handover_s
+                if obstacle:
+                    group.attrs["obstacle_moved_handover"] = obstacle_info["obstacle_moved_handover"]
             if lang:
                 group.attrs["instruction"] = lang_info["instruction"]
                 group.attrs["goal_color"] = lang_info["goal_color"]
@@ -577,13 +621,17 @@ if args.dagger:
     summary.update(dagger=True, dagger_beta=args.dagger_beta)
 if dart:
     summary.update(dart_noise=args.dart_noise)
+if handover:
+    # 引き継ぐ前にポリシーだけで終わったラウンドと、引き継いだ後に計画器が成功したラウンドの数
+    summary.update(handover=handover, handover_none=sum(x["handover_start"] < 0 for x in results),
+                   handover_success=sum(x["success"] and x["handover_start"] >= 0 for x in results))
 if args.via_overshoot:
     summary.update(via_overshoot=args.via_overshoot)
 if maps:
     cv2.imwrite(f"{out_dir}/overview.png", cv2.cvtColor(sweep_video.overview(maps), cv2.COLOR_RGB2BGR))
 with open(f"{out_dir}/summary.json", "w") as f:
     json.dump(summary, f, indent=2)
-print(f"SWEEP {'DAGGER' if args.dagger else 'DATAGEN' if args.record else 'EVAL'} {n_ok}/{n} ({p:.0%}, 95% CI {summary['ci95'][0]:.0%}-{summary['ci95'][1]:.0%}) "
+print(f"SWEEP {'DAGGER' if args.dagger else 'HANDOVER' if handover else 'DATAGEN' if args.record else 'EVAL'} {n_ok}/{n} ({p:.0%}, 95% CI {summary['ci95'][0]:.0%}-{summary['ci95'][1]:.0%}) "
       f"policy={args.policy} seed={seed} -> {out_dir}", flush=True)
 env.close()
 app.close()

@@ -22,6 +22,9 @@ CONVERT_GOAL ?=
 CONVERT_START_COPIES ?= 0
 # dagger で、chunk ごとに計画器の action で動かす確率 (0 なら学習したポリシーだけで動かす)
 DAGGER_BETA ?= 0
+DAGGER_HANDOVER ?=
+DAGGER_TIME_LIMIT ?=
+DAGGER_ROUNDS ?=
 # datagen の乱数のシード (空なら現在時刻。評価のシードとは別にする)、外乱 (spill だけ使える。こぼしを拾い直すデモ)、
 # DART の揺らぎの大きさ (台車の並進の速度の標準偏差、m/s。空なら揺らぎなし。sweep-eval の計画器にも効く。大きさを決めるため)。
 # docs/sweep.md の「外乱と配置の型」
@@ -177,7 +180,7 @@ help:
 config:
 	@echo ".env: $(if $(wildcard .env),あり,なし)"
 	@echo "[対象と記録] TASK=$(TASK) DEVICE=$(DEVICE) DATASET=$(DATASET) RESUME=$(RESUME) FORCE=$(FORCE) LEADER_PORT=$(LEADER_PORT)"
-	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) CONVERT_GOAL=$(or $(CONVERT_GOAL),(なし)) CONVERT_START_COPIES=$(CONVERT_START_COPIES) DAGGER_BETA=$(DAGGER_BETA) DATAGEN_SEED=$(or $(DATAGEN_SEED),(現在時刻)) DATAGEN_DISTURB=$(or $(DATAGEN_DISTURB),(なし)) DATAGEN_NOISE=$(or $(DATAGEN_NOISE),(なし)) SWEEP_TASK=$(SWEEP_TASK)"
+	@echo "             NUM=$(NUM) EPISODES=$(or $(EPISODES),(すべて)) CONVERT_FROM=$(CONVERT_FROM) CONVERT_GOAL=$(or $(CONVERT_GOAL),(なし)) CONVERT_START_COPIES=$(CONVERT_START_COPIES) DAGGER_BETA=$(DAGGER_BETA) DAGGER_HANDOVER=$(or $(DAGGER_HANDOVER),(なし)) DAGGER_TIME_LIMIT=$(or $(DAGGER_TIME_LIMIT),(タスクの既定)) DAGGER_ROUNDS=$(or $(DAGGER_ROUNDS),(既定)) DATAGEN_SEED=$(or $(DATAGEN_SEED),(現在時刻)) DATAGEN_DISTURB=$(or $(DATAGEN_DISTURB),(なし)) DATAGEN_NOISE=$(or $(DATAGEN_NOISE),(なし)) SWEEP_TASK=$(SWEEP_TASK)"
 	@echo "[sim]        SIM_DEVICE=$(SIM_DEVICE) TEX_BUDGET=$(or $(TEX_BUDGET),(Kit の既定 0.6))"
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
@@ -236,13 +239,16 @@ datagen:
 		--num_demos=$(NUM) $(if $(DATAGEN_SEED),--seed=$(DATAGEN_SEED)) $(if $(DATAGEN_DISTURB),--disturb=$(DATAGEN_DISTURB)) $(if $(DATAGEN_NOISE),--dart_noise=$(DATAGEN_NOISE)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
 # DAgger のデータ。学習したポリシー (推論サーバ) で動かし、各フレームの計画器の action を正解として、すべてのラウンドを記録する
+# DAGGER_HANDOVER=T0,T1 では引き継ぎ型 (T0〜T1 秒にポリシーから計画器に引き継ぎ、計画器が成功したものを NUM 個集める)
 dagger: policy-up
 	@if [ -e "$(DATASET_PATH)" ]; then \
 		echo "[エラー] $(DATASET_PATH) は既にあります。別の名前 (DATASET=...) を指定してください"; exit 1; \
 	fi
 	@mkdir -p $(dir $(SIM_RECORD)) && printf 'SIM_DEVICE=%s\nTEX_BUDGET=%s\n' "$(SIM_DEVICE)" "$(TEX_BUDGET)" > $(SIM_RECORD)
-	$(call SIM_RUN,leisaac-dagger) /opt/tools/sweep_eval.py --task=$(SWEEP_TASK) --policy=remote --dagger --dagger_beta=$(DAGGER_BETA) --record \
-		--dataset_file=$(DATASET_FILE) --rounds=$(NUM) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
+	$(call SIM_RUN,leisaac-dagger) /opt/tools/sweep_eval.py --task=$(SWEEP_TASK) --policy=remote --record \
+		$(if $(DAGGER_HANDOVER),--handover=$(DAGGER_HANDOVER) --num_demos=$(NUM),--dagger --dagger_beta=$(DAGGER_BETA) --rounds=$(NUM)) \
+		$(if $(DAGGER_ROUNDS),--rounds=$(DAGGER_ROUNDS)) $(if $(DAGGER_TIME_LIMIT),--time_limit=$(DAGGER_TIME_LIMIT)) \
+		--dataset_file=$(DATASET_FILE) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
