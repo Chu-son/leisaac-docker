@@ -90,6 +90,12 @@ with contextlib.ExitStack() as stack:
         data = stack.enter_context(h5py.File(path, "r"))["data"]
         names = [f"demo_{i}" for i in range(len(data))]
         assert set(names) == set(data), f"{path}: エピソードの名前が demo_0 〜 demo_{len(data) - 1} になっていない: {sorted(data)}"
+        # 引き継ぎ型の収集が途中で止まると、最後のエピソードの属性が書かれずに残る。source がないので計画器のデモに見え、
+        # ポリシーが動かした部分まで使ってしまうので除く
+        interrupted = [n for n in names if any("handover_start" in data[m].attrs for m in names) and "handover_start" not in data[n].attrs]
+        if interrupted:
+            print(f"{path}: 属性のない (収集が途中で止まった) {len(interrupted)} エピソードを使わない: {interrupted}", flush=True)
+        names = [n for n in names if n not in interrupted]
         sources = {n: episode_source(data[n]) for n in names}
         failed = [n for n in names if not data[n].attrs.get("success") and sources[n] != "dagger"]
         assert not failed, f"{path}: 成功していないエピソードがある (datagen は成功したものだけを記録する): {failed[:5]}"
