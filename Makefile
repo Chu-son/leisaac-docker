@@ -78,6 +78,8 @@ RENDER_TITLE      ?=
 
 # --- 学習 (train)。出力先は data/train/$(TRAIN_NAME)/。TRAIN_STEPS / TRAIN_BATCH が空なら sweep_train.py の既定
 TRAIN_POLICY ?= act
+# policy-smoke の学習の step 数 (比較するポリシーを足したときの通し確認)
+SMOKE_STEPS  ?= 20
 TRAIN_NAME   ?= $(DATASET)-$(TRAIN_POLICY)
 TRAIN_STEPS  ?=
 TRAIN_BATCH  ?=
@@ -141,7 +143,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen dagger sweep-replay sweep-render sweep-camera-probe sweep-inspect convert train colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen dagger sweep-replay sweep-render sweep-camera-probe sweep-inspect convert train policy-smoke colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -160,7 +162,8 @@ help:
 	@echo "  sweep-render     評価の状態の記録 (EVAL_RUN=<日時>) を俯瞰のカメラを足して描き直し、紹介用の動画にする (EPISODES で選ぶ。-> data/sweep/eval/<日時>/render/)"
 	@echo "  sweep-inspect    datagen の記録の一覧、上から見た図、動画を作る (Kit なし。-> data/sweep/inspect/$(DATASET)/)"
 	@echo "  convert          datagen の記録 (CONVERT_FROM=$(CONVERT_FROM)) を LeRobot 形式に変換し、HDF5 と照合する (train イメージ。-> data/lerobot/$(DATASET)/)"
-	@echo "  train            data/lerobot/$(DATASET) で TRAIN_POLICY=$(TRAIN_POLICY) (act|smolvla|groot) を学習する (-> data/train/$(TRAIN_NAME)/)"
+	@echo "  train            data/lerobot/$(DATASET) で TRAIN_POLICY=$(TRAIN_POLICY) (act|smolvla|groot|diffusion) を学習する (-> data/train/$(TRAIN_NAME)/)"
+	@echo "  policy-smoke     TRAIN_POLICY を SMOKE_STEPS=$(SMOKE_STEPS) step だけ学習し、入力の照合と短い評価まで通す (Diffusion は ACTION_HORIZON=8 が必要)"
 	@echo "  colab-data       data/lerobot/$(DATASET) を 1 つの tar にする (Colab 用。-> data/colab/$(DATASET).tar。Drive へは手動で上げる)"
 	@echo "  import-policy    Colab の学習結果 FILE=<tar> を data/train/$(TRAIN_NAME)/ に展開する"
 	@echo "  policy-up/-down  学習したポリシーの推論サーバの起動 (healthy まで待つ。$(POLICY_CHECKPOINT)) / 停止"
@@ -186,7 +189,7 @@ config:
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
 	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 90 秒)) EVAL_VIA_OVERSHOOT=$(or $(EVAL_VIA_OVERSHOOT),(なし)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_DISTURB=$(or $(EVAL_DISTURB),(なし)) EVAL_LAYOUT=$(EVAL_LAYOUT) EVAL_INSTRUCTIONS=$(EVAL_INSTRUCTIONS) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
-	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) FILE=$(or $(FILE),(なし))"
+	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) SMOKE_STEPS=$(SMOKE_STEPS) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
 build:
@@ -300,6 +303,16 @@ train:
 	fi
 	$(call TRAIN_RUN,leisaac-train) /opt/tools/sweep_train.py --policy=$(TRAIN_POLICY) --dataset_root=/workspace/data/lerobot/$(DATASET) \
 		--output_dir=/workspace/data/train/$(TRAIN_NAME) $(if $(TRAIN_STEPS),--steps=$(TRAIN_STEPS)) $(if $(TRAIN_BATCH),--batch_size=$(TRAIN_BATCH)) $(if $(TRAIN_SEED),--seed=$(TRAIN_SEED))
+
+# 比較するポリシーの通し確認。短い学習、学習と推論の入力の照合 (policy_io_check.py)、1 ラウンドの短い評価を順に行う。
+# 出力は data/train/smoke-<policy>-<日時>/ と data/sweep/eval/ に残る
+SMOKE_NAME := smoke-$(TRAIN_POLICY)-$(shell date +%Y%m%d-%H%M%S)
+policy-smoke:
+	$(MAKE) train TRAIN_NAME=$(SMOKE_NAME) TRAIN_STEPS=$(SMOKE_STEPS) TRAIN_BATCH=$(or $(TRAIN_BATCH),4)
+	$(MAKE) policy-up TRAIN_NAME=$(SMOKE_NAME)
+	$(call TRAIN_RUN,leisaac-policy-io-check) /opt/tools/policy_io_check.py --policy_path=/workspace/data/train/$(SMOKE_NAME)/checkpoints/last/pretrained_model --dataset_root=/workspace/data/lerobot/$(DATASET)
+	$(MAKE) sweep-eval EVAL_POLICY=remote TRAIN_NAME=$(SMOKE_NAME) EVAL_ROUNDS=1 EVAL_TIME_LIMIT=10
+	$(MAKE) policy-down TRAIN_NAME=$(SMOKE_NAME)
 
 # Colab に渡すデータセットを 1 つの tar にする。Drive へは、ブラウザで手動で上げる (トークンを使わない)
 colab-data:

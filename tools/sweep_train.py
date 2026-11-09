@@ -14,7 +14,8 @@ import sys
 import time
 
 # steps と batch_size は lerobot の例に合わせた出発点 (P6 で見直す。docs/sweep.md)。
-# pretrained は事前学習済みのモデルから始めるもの。rename はデータセットのカメラ名を、そのモデルの名前に読み替える
+# pretrained は事前学習済みのモデルから始めるもの。rename はデータセットのカメラ名を、そのモデルの名前に読み替える。
+# args はこのポリシーにだけ渡す lerobot-train の引数。ポリシーを足すときは、ここに 1 項目足す (docs/sweep.md の「比較するポリシーを足す」)
 PRESETS = {
     "act": {"type": "act", "steps": 100_000, "batch_size": 8},
     # 事前学習時のカメラは camera1〜3。使わない camera3 は飛ばされる (empty_cameras=0)
@@ -23,6 +24,8 @@ PRESETS = {
                            "observation.images.wrist": "observation.images.camera2"}},
     # 基盤モデルは nvidia/GR00T-N1.5-3B。既定では LLM と視覚エンコーダを凍結し、projector と action head を学習する
     "groot": {"type": "groot", "steps": 20_000, "batch_size": 32},
+    # 画像は [240, 320]。既定の crop (84, 84) では大半が捨てられるので、9 割を残す。eval は中央で切る
+    "diffusion": {"type": "diffusion", "steps": 100_000, "batch_size": 32, "args": ["--policy.crop_shape=[216,288]"]},
 }
 
 
@@ -63,6 +66,7 @@ steps = args.steps or preset["steps"]
 cmd = [
     sys.executable, "-m", "lerobot.scripts.lerobot_train",
     *policy_args(preset, args.dataset_root),
+    *preset.get("args", []),
     f"--dataset.repo_id=local/{os.path.basename(os.path.normpath(args.dataset_root))}",
     f"--dataset.root={args.dataset_root}",
     f"--output_dir={args.output_dir}",

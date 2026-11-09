@@ -84,6 +84,7 @@ AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 app = AppLauncher(vars(args)).app
 
+import collections
 import json
 import math
 import os
@@ -169,6 +170,9 @@ class PlannerPolicy:
     def reset(self) -> None:
         self.planner.reset()
 
+    def observe(self, obs, steps: int) -> None:
+        pass
+
     def act(self, obs) -> np.ndarray:
         state = sweep_planner.read_state(self.env)
         p = self.planner
@@ -190,20 +194,30 @@ class PlannerPolicy:
 class RemotePolicy:
     """推論サーバのポリシー。学習データと同じ形 (contract.to_lerobot の state と、[240, 320, 3] uint8 の画像) で観測を送る"""
 
-    def __init__(self, host: str, port: int, timeout_ms: int, horizon: int):
+    def __init__(self, host: str, port: int, timeout_ms: int, horizon: int, seed: int):
         self.client = remote.PolicyClient(host, port, timeout_ms)
         self.server = self.client.call("ping")[0]
+        assert horizon <= self.server["max_horizon"], (
+            f"ACTION_HORIZON={horizon} は、このポリシーが一度に出せる数 ({self.server['max_horizon']}) を超えている")
         self.horizon = horizon
         self.task = contract.INSTRUCTION  # 言語のタスクでは、ラウンドごとに指示文に替える
         # 目標の番号を入れたポリシー (S2g) は、指示文の代わりに、指示した色の one-hot を受け取る。ラウンドごとに色を入れる
         self.uses_goal = contract.GOAL_KEY in self.server.get("input_features", ())
         self.goal_color = None
+        self.n_obs_steps = self.server["n_obs_steps"]
+        self.history = collections.deque(maxlen=self.n_obs_steps)
+        self.seed, self.round = seed, 0
 
     def reset(self) -> None:
-        self.client.call("reset")
+        # 推論で乱数を使うポリシーのために、ラウンドごとのシードを渡す
+        self.client.call("reset", seed=int(np.random.SeedSequence([self.seed, self.round]).generate_state(1)[0]))
+        self.round += 1
         self.infer_ms = []
+        self.history.clear()
 
-    def act(self, obs) -> np.ndarray:
+    def observe(self, obs, steps: int) -> None:
+        """フレームの頭 (学習データの 1 フレームと同じ時点) の観測を、1 フレームにつき 1 回だけ受け取る。学習では連続したフレームを
+        見ているので、chunk の区切りごとではなく、毎フレーム受け取る"""
         joint_pos = obs["joint_pos"][0].cpu().numpy().astype(np.float64)
         joint_vel = obs["joint_vel"][0].cpu().numpy().astype(np.float64)
         state, _ = contract.to_lerobot(joint_pos, joint_vel, np.zeros(len(contract.ACTION_NAMES)))
@@ -213,7 +227,18 @@ class RemotePolicy:
         for cam in contract.CAMERAS:
             image = obs[cam][0].cpu().numpy()
             assert image.shape == contract.IMAGE_SHAPE and image.dtype == np.uint8, f"{cam}: {image.shape} {image.dtype}"
-            arrays[f"observation.images.{cam}"] = image
+            arrays[f"observation.images.{cam}"] = image.copy()
+        assert not self.history or steps - self.history[-1][0] == contract.SIM_STEPS_PER_FRAME, "観測が連続したフレームになっていない"
+        self.history.append((steps, arrays))
+
+    def act(self, obs) -> np.ndarray:
+        frames = [arrays for _, arrays in self.history]
+        if self.n_obs_steps == 1:
+            arrays = frames[0]
+        else:
+            # ラウンドの最初は、足りない分を最初のフレームで埋める (学習のデータの読み出しと lerobot の populate_queues と同じ)
+            frames = [frames[0]] * (self.n_obs_steps - len(frames)) + frames
+            arrays = {k: np.stack([f[k] for f in frames]) for k in frames[0]}
         header, out = self.client.call("act", arrays, task=self.task, robot_type="lekiwi_client",
                                        horizon=self.horizon)
         self.infer_ms.append(header["infer_ms"])
@@ -334,7 +359,7 @@ if args.policy == "planner":
     policy = PlannerPolicy(env, DartNoise(args.dart_noise) if dart else None, overshoot=args.via_overshoot)
     print(f"policy=planner seed={seed} dart_noise={args.dart_noise} brush tip (base frame)={policy.poses.tip.round(3).tolist()}", flush=True)
 else:
-    policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon)
+    policy = RemotePolicy(args.policy_host, args.policy_port, args.policy_timeout_ms, args.action_horizon, seed)
     print(f"policy=remote seed={seed} action_horizon={args.action_horizon} server={policy.server}", flush=True)
     assert lang or not policy.uses_goal, f"指示した色を入力にするポリシー ({contract.GOAL_KEY}) は、言語のタスクでだけ評価できる"
 expert = PlannerPolicy(env) if args.dagger or handover else None
@@ -442,10 +467,13 @@ with open(f"{out_dir}/rounds.jsonl", "w") as log:
                     box_handover = env.scene[sweep_floor.OBSTACLE_NAME].data.root_pos_w[0, :2].clone()
             if handover_frame >= 0 and handover_start < 0 and expert.planner.phase != "init":
                 handover_start = steps // contract.SIM_STEPS_PER_FRAME
+            policy.observe(obs["policy"], steps)
             # 引き継いだ後は、計画器が 1 フレームずつ action を出す
             chunk = expert.act(obs["policy"]) if handover_frame >= 0 else policy.act(obs["policy"])
             use_expert = args.dagger and rng.random() < args.dagger_beta
             for k, a in enumerate(chunk):
+                if k > 0:  # k = 0 のフレームの観測は、chunk を求める前に渡している
+                    policy.observe(obs["policy"], steps)
                 joint_pos = obs["policy"]["joint_pos"][0].cpu().numpy().astype(np.float64)
                 sim_action = torch.tensor(contract.from_lerobot_action(a, joint_pos), device=env.device)[None]
                 if args.dagger:

@@ -501,6 +501,7 @@ make import-policy FILE=~/Downloads/xxx.tar TRAIN_NAME=sweep_floor-smolvla   # C
 | act | 新しく作る（`--policy.type=act`。backbone は ImageNet の ResNet18） | 100,000 / 8 | — |
 | smolvla | `lerobot/smolvla_base` から | 20,000 / 64 | 下の「事前学習済みのモデルの入出力」 |
 | groot | `nvidia/GR00T-N1.5-3B` から（`--policy.type=groot`。LLM と視覚エンコーダは凍結） | 20,000 / 32 | flash-attn が必須。ローカルでは学習できない |
+| diffusion | 新しく作る（`--policy.type=diffusion`） | 100,000 / 32 | 画像の切り出しを 216×288 にする（既定の 84×84 では大半が捨てられる）。batch 64 は VRAM が足りない（12GB、2026-11-09）。batch 32 で 1 step 0.22 秒。評価は `ACTION_HORIZON=8` |
 
 - **事前学習済みのモデルの入出力**: smolvla_base は、入出力の名前と形（camera1〜3、state と action が 6 次元）を自分の設定に持っていて、lerobot はそれをデータセットに合わせません。action が 6 次元のままだと、推論で台車の速度（7〜9 番目）が切り捨てられます。そこで、`sweep_train.py` がデータセットの `meta/info.json` から入出力の形を作り、`--policy.input_features` / `--policy.output_features` で上書きします。カメラは rename_map で front → camera1、wrist → camera2 にします。dict の上書きは足し込みなので、camera3 は設定に残りますが、画像がないカメラは飛ばされます（`empty_cameras=0`）。
 - **flash-attn**: lerobot の groot が必須にしています（視覚エンコーダが flash_attention_2 を固定で使う）。ソースからのビルドを避け、公式の配布物（2.8.3、torch 2.7、CUDA 12、C++11 ABI、Python 3.11 向け）を URL で固定しています。この GPU（RTX 5070、sm_120）でも動きます（`make check` の 6 番目で確かめる）。
@@ -549,6 +550,25 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 |---|---|---|
 | ローカルの train コンテナ（Drive のマウントだけ飛ばす。RTX 5070、ドライバ 580） | commit 7488f50、ACT 50 step | clone から保存まで通る。`uv sync --locked` は約 3 分（キャッシュなし）。学習 12 秒。tar 591MB（最後のチェックポイントだけ）。`make import-policy` で取り込めた |
 | Colab（L4、ドライバ 580.82.07、compute capability 8.9） | commit 9cd99cd、ACT 50 step | 通る（ENV OK、学習を含めて sweep_train.py が 26 秒）。Drive の tar をダウンロードし、`make import-policy` で取り込めた |
+
+### 比較するポリシーを足す
+
+lerobot のポリシーを比較に足すときに触る場所は、次の 2 か所です。評価の本体（`tools/sweep_eval.py`）は変えません。
+
+1. `tools/sweep_train.py` の `PRESETS` に 1 項目足します。このポリシーにだけ渡す `lerobot-train` の引数は `args` に書きます。
+2. 推論の呼び方が既定と違うときだけ、`tools/policy_server.py` の `ADAPTERS` に足します。既定は「最新の観測で `predict_action_chunk` を呼び、一度に `chunk_size` 個まで返す」です。過去の観測を使うポリシー（`n_obs_steps` > 1）は、ここに手順がないと起動の時点で止まります。
+
+足したら、次のコマンドで短い学習から評価まで通します。
+
+```bash
+make policy-smoke TRAIN_POLICY=diffusion DATASET=sweep_obst200v2 ACTION_HORIZON=8 SWEEP_TASK=LeIsaac-LeKiwi-Sweep-Obstacle-v0
+```
+
+- 順に、`SMOKE_STEPS` step の学習、推論サーバの起動、入力の照合（`tools/policy_io_check.py`）、1 ラウンド 10 秒の評価を行います。途中で失敗したら、推論サーバは `make policy-down` で止めます。
+- 入力の照合は、データセットの同じフレームを、学習と同じ読み出しでモデルに直接入れた action と、推論サーバに送った action を、同じシードで比べます。フレームの順、カメラの順、正規化のどれかが学習と違えば、一致しません。今は `n_obs_steps` > 1 の Diffusion だけが対象です。
+- 過去の観測は、評価の側（`RemotePolicy`）が毎フレーム受け取って、直近の `n_obs_steps` 枚を送ります。学習は連続した 30 fps のフレームを見ているので、chunk の区切りごとの観測では合いません。ラウンドの最初は、足りない分を最初のフレームで埋めます。`n_obs_steps` が 1 のポリシーの通信は、改修の前と同じです。
+- 推論サーバは、`ping` で `n_obs_steps` と、一度に返せる action の数 `max_horizon` を返します。`ACTION_HORIZON` が `max_horizon` を超えていると、評価は始める前に止まります。
+- 推論で乱数を使うポリシーのために、評価はラウンドごとのシードを `reset` で渡します。
 
 ## 学習したポリシーの評価（`tools/policy_server.py`、`make sweep-eval EVAL_POLICY=remote`）
 
