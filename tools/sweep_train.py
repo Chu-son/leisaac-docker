@@ -5,10 +5,14 @@ Docker の外 (Colab。notebooks/train_colab.ipynb) でも、train の環境 (do
 - ポリシーごとの既定 (PRESETS) に、共通の設定 (ローカルのデータセット、Hub に上げない、wandb を使わない) を足して lerobot-train を実行する
 - --steps と --batch_size で既定を変えられる。-- の後ろは、そのまま lerobot-train に渡す (例: -- --policy.chunk_size=50)
 - output_dir が既にあれば止める (lerobot-train も止める)。実行したコマンドと結果を output_dir の sweep_train.json に残す
+- --resume_from に学習済みのチェックポイント (<学習>/checkpoints/<step>) を与えると、それを新しい output_dir に写し、
+  その続きから --steps まで学習する (lerobot の --resume。optimizer と乱数の状態も戻す)。元の学習は変えない。
+  ポリシーやデータセットや batch はチェックポイントの train_config.json のものを使う
 """
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -56,36 +60,63 @@ parser.add_argument("--batch_size", type=int, default=None)
 parser.add_argument("--save_freq", type=int, default=None, help="チェックポイントを残す間隔 (省略時は steps の 1/5)")
 parser.add_argument("--num_workers", type=int, default=4)
 parser.add_argument("--seed", type=int, default=None, help="学習の乱数のシード (省略時は lerobot の既定の 1000)")
+parser.add_argument("--resume_from", default=None, help="続きから学習するチェックポイント (<学習>/checkpoints/<step>)。新しい output_dir に写してから再開する")
 parser.add_argument("extra", nargs="*", help="-- の後ろに書いた引数は、そのまま lerobot-train に渡す")
 args = parser.parse_args()
 assert os.path.isfile(f"{args.dataset_root}/meta/info.json"), f"{args.dataset_root} は LeRobot 形式のデータセットではない"
-assert not os.path.exists(args.output_dir), f"{args.output_dir} は既にあります (上書きも再開もしない)"
+assert not os.path.exists(args.output_dir), f"{args.output_dir} は既にあります (上書きしない。再開も新しい output_dir に写して行う)"
 
 preset = PRESETS[args.policy]
 steps = args.steps or preset["steps"]
-cmd = [
-    sys.executable, "-m", "lerobot.scripts.lerobot_train",
-    *policy_args(preset, args.dataset_root),
-    *preset.get("args", []),
-    f"--dataset.repo_id=local/{os.path.basename(os.path.normpath(args.dataset_root))}",
-    f"--dataset.root={args.dataset_root}",
-    f"--output_dir={args.output_dir}",
-    f"--job_name={os.path.basename(os.path.normpath(args.output_dir))}",
-    f"--steps={steps}",
-    f"--batch_size={args.batch_size or preset['batch_size']}",
-    f"--save_freq={args.save_freq or max(1, steps // 5)}",
-    f"--log_freq={min(200, max(1, steps // 10))}",
-    f"--num_workers={args.num_workers}",
-    *([f"--seed={args.seed}"] if args.seed is not None else []),
-    "--policy.device=cuda",
-    "--policy.push_to_hub=false",
-    "--wandb.enable=false",
-    *args.extra,
-]
+if args.resume_from:
+    src = os.path.normpath(args.resume_from)
+    config = f"{src}/pretrained_model/train_config.json"
+    assert os.path.isfile(config), f"{config} がありません"
+    with open(config) as f:
+        saved = json.load(f)
+    assert saved["policy"]["type"] == preset.get("type", saved["policy"]["type"]), "--policy がチェックポイントと違います"
+    assert os.path.normpath(saved["dataset"]["root"]) == os.path.normpath(args.dataset_root), "--dataset_root がチェックポイントと違います"
+    assert args.batch_size is None, "再開では batch を変えない (チェックポイントのものを使う)"
+    with open(f"{src}/training_state/training_step.json") as f:
+        done = json.load(f)["step"]
+    assert args.steps and args.steps > done, f"--steps はチェックポイントの step ({done}) より大きくする"
+    ckpt = f"{args.output_dir}/checkpoints/{os.path.basename(src)}"
+    shutil.copytree(src, ckpt, symlinks=False)
+    os.symlink(os.path.basename(src), f"{args.output_dir}/checkpoints/last")
+    cmd = [
+        sys.executable, "-m", "lerobot.scripts.lerobot_train",
+        "--resume=true",
+        f"--config_path={ckpt}/pretrained_model/train_config.json",
+        f"--output_dir={args.output_dir}",
+        f"--job_name={os.path.basename(os.path.normpath(args.output_dir))}",
+        f"--steps={steps}",
+        f"--save_freq={args.save_freq or max(1, (steps - done) // 2)}",
+        *args.extra,
+    ]
+else:
+    cmd = [
+        sys.executable, "-m", "lerobot.scripts.lerobot_train",
+        *policy_args(preset, args.dataset_root),
+        *preset.get("args", []),
+        f"--dataset.repo_id=local/{os.path.basename(os.path.normpath(args.dataset_root))}",
+        f"--dataset.root={args.dataset_root}",
+        f"--output_dir={args.output_dir}",
+        f"--job_name={os.path.basename(os.path.normpath(args.output_dir))}",
+        f"--steps={steps}",
+        f"--batch_size={args.batch_size or preset['batch_size']}",
+        f"--save_freq={args.save_freq or max(1, steps // 5)}",
+        f"--log_freq={min(200, max(1, steps // 10))}",
+        f"--num_workers={args.num_workers}",
+        *([f"--seed={args.seed}"] if args.seed is not None else []),
+        "--policy.device=cuda",
+        "--policy.push_to_hub=false",
+        "--wandb.enable=false",
+        *args.extra,
+    ]
 print("+ " + " ".join(cmd[1:]), flush=True)
 t0 = time.time()
 returncode = subprocess.run(cmd).returncode
-summary = {"policy": args.policy, "dataset_root": args.dataset_root, "command": cmd[1:], "returncode": returncode,
+summary = {"policy": args.policy, "dataset_root": args.dataset_root, "resume_from": args.resume_from, "command": cmd[1:], "returncode": returncode,
            "elapsed_s": round(time.time() - t0)}
 if os.path.isdir(args.output_dir):
     with open(f"{args.output_dir}/sweep_train.json", "w") as f:

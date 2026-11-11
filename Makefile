@@ -85,6 +85,9 @@ TRAIN_STEPS  ?=
 TRAIN_BATCH  ?=
 # 学習の乱数のシード。空なら lerobot の既定 (1000)。学習のばらつきを見るときに変える
 TRAIN_SEED   ?=
+# 続きから学習するチェックポイント (data/train/ からの相対。例: sweep_obst400v2-act/checkpoints/200000)。
+# 空なら最初から学習する。TRAIN_NAME の新しい出力先に写してから、TRAIN_STEPS まで学習する。元の学習は変えない
+TRAIN_RESUME_FROM ?=
 # import-policy で取り込む、Colab の学習結果 (tar)
 FILE         ?=
 
@@ -189,7 +192,7 @@ config:
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
 	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 90 秒)) EVAL_VIA_OVERSHOOT=$(or $(EVAL_VIA_OVERSHOOT),(なし)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_DISTURB=$(or $(EVAL_DISTURB),(なし)) EVAL_LAYOUT=$(EVAL_LAYOUT) EVAL_INSTRUCTIONS=$(EVAL_INSTRUCTIONS) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
-	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) SMOKE_STEPS=$(SMOKE_STEPS) FILE=$(or $(FILE),(なし))"
+	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) TRAIN_RESUME_FROM=$(or $(TRAIN_RESUME_FROM),(なし)) SMOKE_STEPS=$(SMOKE_STEPS) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
 build:
@@ -302,7 +305,7 @@ train:
 		echo "[エラー] data/train/$(TRAIN_NAME) は既にあります。別の名前 (TRAIN_NAME=...) を指定してください"; exit 1; \
 	fi
 	$(call TRAIN_RUN,leisaac-train) /opt/tools/sweep_train.py --policy=$(TRAIN_POLICY) --dataset_root=/workspace/data/lerobot/$(DATASET) \
-		--output_dir=/workspace/data/train/$(TRAIN_NAME) $(if $(TRAIN_STEPS),--steps=$(TRAIN_STEPS)) $(if $(TRAIN_BATCH),--batch_size=$(TRAIN_BATCH)) $(if $(TRAIN_SEED),--seed=$(TRAIN_SEED))
+		--output_dir=/workspace/data/train/$(TRAIN_NAME) $(if $(TRAIN_STEPS),--steps=$(TRAIN_STEPS)) $(if $(TRAIN_BATCH),--batch_size=$(TRAIN_BATCH)) $(if $(TRAIN_SEED),--seed=$(TRAIN_SEED)) $(if $(TRAIN_RESUME_FROM),--resume_from=/workspace/data/train/$(TRAIN_RESUME_FROM))
 
 # 比較するポリシーの通し確認。短い学習、学習と推論の入力の照合 (policy_io_check.py)、1 ラウンドの短い評価を順に行う。
 # 出力は data/train/smoke-<policy>-<日時>/ と data/sweep/eval/ に残る

@@ -486,6 +486,8 @@ Kit を起動せずに HDF5 を読みます。出力先は `data/sweep/inspect/s
 ```bash
 make train DATASET=sweep_floor TRAIN_POLICY=act                  # -> data/train/sweep_floor-act/
 make train DATASET=sweep_floor TRAIN_POLICY=act TRAIN_STEPS=300 TRAIN_NAME=act-try
+make train DATASET=sweep_obst400v2 TRAIN_NAME=sweep_obst400v2-act-600k TRAIN_STEPS=600000 \
+    TRAIN_RESUME_FROM=sweep_obst400v2-act/checkpoints/200000    # 200,000 step の続きから 600,000 step まで
 make colab-data DATASET=sweep_floor                              # -> data/colab/sweep_floor.tar（Drive へは手動で上げる）
 make import-policy FILE=~/Downloads/xxx.tar TRAIN_NAME=sweep_floor-smolvla   # Colab の結果 -> data/train/sweep_floor-smolvla/
 ```
@@ -494,7 +496,8 @@ make import-policy FILE=~/Downloads/xxx.tar TRAIN_NAME=sweep_floor-smolvla   # C
 
 - lerobot 0.4.2 の `lerobot-train` を呼ぶ薄いラッパーです。Docker の外（Colab）でも、train の環境（`docker/envs/train` の lock）があれば同じように動きます。
 - ポリシーごとの既定（`PRESETS`）に、共通の設定（ローカルのデータセット、Hub に上げない、wandb を使わない、チェックポイントは steps の 1/5 ごと）を足して実行します。`-- ` の後ろは、そのまま lerobot-train に渡します。
-- 出力先は `data/train/<TRAIN_NAME>/`（lerobot の output_dir。`checkpoints/<step>/pretrained_model/` と `checkpoints/last`）。既にあれば止めます（上書きも再開もしない）。実行したコマンドと結果は `sweep_train.json` に残ります。`data/policies/` は make assets で取得するポリシーの場所なので、学習の出力は分けています。
+- 出力先は `data/train/<TRAIN_NAME>/`（lerobot の output_dir。`checkpoints/<step>/pretrained_model/` と `checkpoints/last`）。既にあれば止めます（上書きしない）。
+- 続きから学習するときは `TRAIN_RESUME_FROM=<学習>/checkpoints/<step>` を与えます。チェックポイントを新しい `TRAIN_NAME` に写し、lerobot の `--resume` で `TRAIN_STEPS` まで学習します。optimizer と乱数の状態も戻ります。ポリシー、データセット、batch はチェックポイントのものを使い、元の学習は変えません。ACT の既定の学習率は一定なので、最初から長く学習したのとほぼ同じになります。学習率を下げていくポリシー（SmolVLA など）は、計画が最初の steps で決まっているので、続きの学習は同じにはなりません。実行したコマンドと結果は `sweep_train.json` に残ります。`data/policies/` は make assets で取得するポリシーの場所なので、学習の出力は分けています。
 
 | ポリシー | 始め方 | 既定の steps / batch | 注意 |
 |---|---|---|---|
