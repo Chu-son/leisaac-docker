@@ -14,6 +14,7 @@ front カメラの水平の画角に入っていたフレームの割合 (ゴミ
 状態とランダム化の値、30fps のフレームごとの状態と action)。sweep_replay.py --eval_dir で再生でき、動画も作り直せる。
 --disturb push,spill は、ラウンドごとに外乱を 1 種類加える (ラウンドの番号で順に割り当てる。leisaac_ext.disturb)。
 --layout は配置の型 (sweep_floor.LAYOUTS。scatter はゴミを広く散らす)。どちらも評価用で、--record とは使えない。
+--obstacle_modes は障害物のタスクの箱の置き方を絞る (例: between だけ)。評価と --record の両方に効く。
 ただし --disturb spill だけは、こぼしを拾い直すデモを作るために --record と使える (こぼしは HDF5 の再生では再現しない。
 エピソードの属性 disturb に、こぼしの中身を残す)。
 --videos を付けると、ラウンドごとの動画 (videos/round_<番号>_<success|failure>.mp4。front、wrist、上から見た図を
@@ -62,6 +63,8 @@ parser.add_argument("--rounds", type=int, default=None, help="ラウンド数 (�
 parser.add_argument("--seed", type=int, default=None, help="乱数のシード (省略時は現在時刻)")
 parser.add_argument("--disturb", default=None, help="外乱の種類 (カンマ区切り。push, spill。ラウンドの番号で順に割り当てる)")
 parser.add_argument("--layout", default="default", help="配置の型 (sweep_floor.LAYOUTS)")
+parser.add_argument("--obstacle_modes", default=None,
+                    help="障害物のタスクの箱の置き方 (カンマ区切り。between, side)。省略時はタスクの既定 (両方から一様)。評価と記録の両方に効く")
 parser.add_argument("--randomize", default=None, help="追加のランダム化の項目 (カンマ区切り。all ですべて。省略時はタスクの既定)")
 parser.add_argument("--out_dir", default=None,
                     help="結果の保存先 (省略時は /workspace/data/sweep/eval/<日時>。--record では <dataset_file から .hdf5 を除いたもの>.datagen)")
@@ -296,6 +299,8 @@ if handover:
 disturb_kinds = [k for k in (args.disturb or "").split(",") if k]
 assert not set(disturb_kinds) - set(disturb.KINDS), f"--disturb は {disturb.KINDS} から選ぶ"
 assert args.layout in sweep_floor.LAYOUTS, f"--layout は {sorted(sweep_floor.LAYOUTS)} から選ぶ"
+obstacle_modes = tuple(m for m in (args.obstacle_modes or "").split(",") if m) or None
+assert not (obstacle_modes and set(obstacle_modes) - set(sweep_mdp.OBSTACLE_MODES)), f"--obstacle_modes は {sweep_mdp.OBSTACLE_MODES} から選ぶ"
 dart = args.dart_noise is not None
 if dart:
     assert args.policy == "planner" and args.dart_noise >= 0, "--dart_noise (0 以上) は --policy planner と一緒に使う"
@@ -334,6 +339,9 @@ cfg.seed = seed
 if args.time_limit is not None:
     cfg.episode_length_s = args.time_limit
 cfg.events.reset_layout.params.update(sweep_floor.LAYOUTS[args.layout])
+if obstacle_modes:
+    assert cfg.events.reset_layout.params.get("obstacle"), "--obstacle_modes は障害物のタスクだけで使う"
+    cfg.events.reset_layout.params["obstacle_modes"] = obstacle_modes
 if args.randomize is not None:
     names = sweep_floor.ALL_RANDOMIZATION if args.randomize == "all" else [n for n in args.randomize.split(",") if n]
     cfg.set_randomization(names)
@@ -615,7 +623,7 @@ summary = {"task": args.task, "policy": args.policy, "seed": seed, "rounds": n, 
            "mean_view_fraction": round(float(np.mean([x["view_fraction"] for x in results])), 3) if n else None,
            "time_limit": cfg.episode_length_s, "wall_time": round(time.time() - start, 1), "device": args.device,
            "layout": args.layout, "layout_violation_rounds": sum(x["layout_violation"] > 0 for x in results),
-           "disturb": disturb_kinds}
+           "disturb": disturb_kinds, "obstacle_modes": list(obstacle_modes) if obstacle_modes else None}
 for kind in disturb_kinds:
     rows = [x for x in results if x["disturb"] == kind]
     # 種類ごとの [成功, ラウンド, 外乱が起きたラウンド]

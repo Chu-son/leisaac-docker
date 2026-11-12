@@ -8,6 +8,8 @@ Docker の外 (Colab。notebooks/train_colab.ipynb) でも、train の環境 (do
 - --resume_from に学習済みのチェックポイント (<学習>/checkpoints/<step>) を与えると、それを新しい output_dir に写し、
   その続きから --steps まで学習する (lerobot の --resume。optimizer と乱数の状態も戻す)。元の学習は変えない。
   ポリシーやデータセットや batch はチェックポイントの train_config.json のものを使う
+- --resume は、途中で止まった学習 (Colab の切断など) を、同じ output_dir の最後のチェックポイントから、最初に決めた
+  steps まで続ける。学習率の計画も最初の設定のままなので、止まらずに学習したのと同じになる
 """
 import argparse
 import json
@@ -61,14 +63,35 @@ parser.add_argument("--save_freq", type=int, default=None, help="チェックポ
 parser.add_argument("--num_workers", type=int, default=4)
 parser.add_argument("--seed", type=int, default=None, help="学習の乱数のシード (省略時は lerobot の既定の 1000)")
 parser.add_argument("--resume_from", default=None, help="続きから学習するチェックポイント (<学習>/checkpoints/<step>)。新しい output_dir に写してから再開する")
+parser.add_argument("--resume", action="store_true", help="途中で止まった学習を、同じ output_dir の最後のチェックポイントから続ける")
 parser.add_argument("extra", nargs="*", help="-- の後ろに書いた引数は、そのまま lerobot-train に渡す")
 args = parser.parse_args()
 assert os.path.isfile(f"{args.dataset_root}/meta/info.json"), f"{args.dataset_root} は LeRobot 形式のデータセットではない"
-assert not os.path.exists(args.output_dir), f"{args.output_dir} は既にあります (上書きしない。再開も新しい output_dir に写して行う)"
+if args.resume:
+    assert not args.resume_from, "--resume と --resume_from は一緒に使えない"
+    assert os.path.isfile(f"{args.output_dir}/checkpoints/last/pretrained_model/train_config.json"), \
+        f"{args.output_dir}/checkpoints/last がない (再開できるチェックポイントがない)"
+else:
+    assert not os.path.exists(args.output_dir), f"{args.output_dir} は既にあります (上書きしない。続きは --resume か --resume_from)"
 
 preset = PRESETS[args.policy]
 steps = args.steps or preset["steps"]
-if args.resume_from:
+previous = None
+if args.resume:
+    with open(f"{args.output_dir}/checkpoints/last/pretrained_model/train_config.json") as f:
+        saved = json.load(f)
+    assert args.steps in (None, saved["steps"]), "--resume では steps を変えない (延ばすなら --resume_from で新しい output_dir に)"
+    if os.path.isfile(f"{args.output_dir}/sweep_train.json"):
+        with open(f"{args.output_dir}/sweep_train.json") as f:
+            previous = json.load(f)
+    steps = saved["steps"]
+    cmd = [
+        sys.executable, "-m", "lerobot.scripts.lerobot_train",
+        "--resume=true",
+        f"--config_path={args.output_dir}/checkpoints/last/pretrained_model/train_config.json",
+        *args.extra,
+    ]
+elif args.resume_from:
     src = os.path.normpath(args.resume_from)
     config = f"{src}/pretrained_model/train_config.json"
     assert os.path.isfile(config), f"{config} がありません"
@@ -116,7 +139,7 @@ else:
 print("+ " + " ".join(cmd[1:]), flush=True)
 t0 = time.time()
 returncode = subprocess.run(cmd).returncode
-summary = {"policy": args.policy, "dataset_root": args.dataset_root, "resume_from": args.resume_from, "command": cmd[1:], "returncode": returncode,
+summary = {"policy": args.policy, "dataset_root": args.dataset_root, "resume_from": args.resume_from, "resume": args.resume, "previous": previous, "command": cmd[1:], "returncode": returncode,
            "elapsed_s": round(time.time() - t0)}
 if os.path.isdir(args.output_dir):
     with open(f"{args.output_dir}/sweep_train.json", "w") as f:

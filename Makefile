@@ -69,10 +69,16 @@ EVAL_RANDOMIZE    ?=
 # どちらも評価用 (docs/sweep.md の「外乱と配置の型」)
 EVAL_DISTURB      ?=
 EVAL_LAYOUT       ?= default
+# 障害物のタスクの箱の置き方を絞る (カンマ区切り。between, side)。空ならタスクの既定 (両方から一様)。sweep-eval と datagen に効く
+OBSTACLE_MODES    ?=
 # 言語のタスクの sweep-eval の指示文の型。train (学習と同じ) か paraphrase (学習に使わない言い換え)
 EVAL_INSTRUCTIONS ?= train
 # sweep-replay で再生する評価 (data/sweep/eval/<EVAL_RUN>/ の状態の記録)。空なら DATASET の datagen の記録を再生する
 EVAL_RUN          ?=
+# sweep-eval の結果の出力先 (data/sweep/ からの相対)。空なら data/sweep/eval/<日時>/。sweep-curve が使う
+EVAL_OUT_DIR      ?=
+# sweep-curve で順に評価するチェックポイント (空白区切り。data/train/<TRAIN_NAME>/checkpoints/ の名前。例: "200000 400000 600000")
+CURVE_CHECKPOINTS ?=
 # sweep-render の動画の左上に出す見出し (例: "ACT (exp 10)")。英数字のみ (OpenCV の文字)
 RENDER_TITLE      ?=
 
@@ -88,6 +94,8 @@ TRAIN_SEED   ?=
 # 続きから学習するチェックポイント (data/train/ からの相対。例: sweep_obst400v2-act/checkpoints/200000)。
 # 空なら最初から学習する。TRAIN_NAME の新しい出力先に写してから、TRAIN_STEPS まで学習する。元の学習は変えない
 TRAIN_RESUME_FROM ?=
+# チェックポイントを残す間隔 (step)。空なら steps の 1/5 (続きからの学習では、追加の分の 1/2)
+TRAIN_SAVE_FREQ ?=
 # import-policy で取り込む、Colab の学習結果 (tar)
 FILE         ?=
 
@@ -146,7 +154,7 @@ endef
 # キーボード/ゲームパッドで記録したデータの再生には --task_type が必要
 TASK_TYPE_ARG := $(if $(filter keyboard gamepad lekiwi-keyboard lekiwi-gamepad,$(DEVICE)),--task_type=$(DEVICE))
 
-.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval datagen dagger sweep-replay sweep-render sweep-camera-probe sweep-inspect convert train policy-smoke colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
+.PHONY: help config build down stop shell-sim shell-gr00t xhost list-envs smoke sweep-check sweep-eval sweep-curve datagen dagger sweep-replay sweep-render sweep-camera-probe sweep-inspect convert train policy-smoke colab-data import-policy policy-up policy-down policy-logs teleop replay teleop-lekiwi replay-lekiwi \
         assets gr00t-up gr00t-down gr00t-logs eval check lock lock-check
 
 help:
@@ -158,6 +166,7 @@ help:
 	@echo "  smoke            TASK をヘッドレスで作り、ゼロ action で数ステップ動かす (起動確認)"
 	@echo "  sweep-check      Sweep タスクの確認 (contract と上流の一致、配置、成功判定。画像は data/sweep/check/)"
 	@echo "  sweep-eval       Sweep タスクを EVAL_POLICY=$(EVAL_POLICY) (planner|remote) で EVAL_ROUNDS 回解き、成功率を測る (-> data/sweep/eval/<日時>/)"
+	@echo "  sweep-curve      TRAIN_NAME のチェックポイント (CURVE_CHECKPOINTS) を同じ EVAL_SEED で順に評価し、学習曲線の表にする (-> data/sweep/curve/<TRAIN_NAME>/)"
 	@echo "  datagen          Sweep タスクの自動生成。計画器が成功したエピソードを NUM=$(NUM) 個記録する (-> $(DATASET_PATH))"
 	@echo "  dagger           学習したポリシー (TRAIN_NAME) で NUM 回動かし、計画器の action を正解として記録する (DAgger。-> $(DATASET_PATH))"
 	@echo "  sweep-camera-probe  カメラの取り付けの候補を、同じ場面で描き比べる (-> data/sweep/camera_probe/)"
@@ -191,8 +200,8 @@ config:
 	@echo "[推論]       HEADLESS=$(HEADLESS) EVAL_ROUNDS=$(EVAL_ROUNDS) POLICY_HOST=$(POLICY_HOST) POLICY_TIMEOUT_MS=$(POLICY_TIMEOUT_MS) ACTION_HORIZON=$(ACTION_HORIZON)"
 	@echo "             INSTRUCTION=$(INSTRUCTION)"
 	@echo "             POLICY_DIR=$(or $(POLICY_DIR),(compose.yaml の既定)) GR00T_DATA_CONFIG=$(or $(GR00T_DATA_CONFIG),(compose.yaml の既定))"
-	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 90 秒)) EVAL_VIA_OVERSHOOT=$(or $(EVAL_VIA_OVERSHOOT),(なし)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_DISTURB=$(or $(EVAL_DISTURB),(なし)) EVAL_LAYOUT=$(EVAL_LAYOUT) EVAL_INSTRUCTIONS=$(EVAL_INSTRUCTIONS) EVAL_RUN=$(or $(EVAL_RUN),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
-	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) TRAIN_RESUME_FROM=$(or $(TRAIN_RESUME_FROM),(なし)) SMOKE_STEPS=$(SMOKE_STEPS) FILE=$(or $(FILE),(なし))"
+	@echo "             EVAL_POLICY=$(EVAL_POLICY) EVAL_SEED=$(or $(EVAL_SEED),(現在時刻)) EVAL_VIDEOS=$(EVAL_VIDEOS) EVAL_TIME_LIMIT=$(or $(EVAL_TIME_LIMIT),(既定 90 秒)) EVAL_VIA_OVERSHOOT=$(or $(EVAL_VIA_OVERSHOOT),(なし)) EVAL_RANDOMIZE=$(or $(EVAL_RANDOMIZE),(既定)) EVAL_DISTURB=$(or $(EVAL_DISTURB),(なし)) EVAL_LAYOUT=$(EVAL_LAYOUT) OBSTACLE_MODES=$(or $(OBSTACLE_MODES),(既定)) EVAL_INSTRUCTIONS=$(EVAL_INSTRUCTIONS) EVAL_RUN=$(or $(EVAL_RUN),(なし)) EVAL_OUT_DIR=$(or $(EVAL_OUT_DIR),(eval/<日時>)) CURVE_CHECKPOINTS=$(or $(CURVE_CHECKPOINTS),(なし)) RENDER_TITLE=$(or $(RENDER_TITLE),(なし)) TRAIN_CHECKPOINT=$(TRAIN_CHECKPOINT) (推論サーバ: $(POLICY_CHECKPOINT))"
+	@echo "[学習]       TRAIN_POLICY=$(TRAIN_POLICY) TRAIN_NAME=$(TRAIN_NAME) TRAIN_STEPS=$(or $(TRAIN_STEPS),(既定)) TRAIN_BATCH=$(or $(TRAIN_BATCH),(既定)) TRAIN_SEED=$(or $(TRAIN_SEED),(既定 1000)) TRAIN_RESUME_FROM=$(or $(TRAIN_RESUME_FROM),(なし)) TRAIN_SAVE_FREQ=$(or $(TRAIN_SAVE_FREQ),(既定)) SMOKE_STEPS=$(SMOKE_STEPS) FILE=$(or $(FILE),(なし))"
 	@echo "[その他]     GROUP=$(or $(GROUP),(すべて)) UPGRADE=$(UPGRADE)"
 
 build:
@@ -203,7 +212,7 @@ down:
 
 # Kit は異常終了後に SIGTERM を無視して残ることがあるため、コンテナごと強制終了する
 stop:
-	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval \
+	-docker rm -f leisaac-teleop leisaac-replay leisaac-eval leisaac-list-envs leisaac-smoke leisaac-sweep-check leisaac-sweep-eval leisaac-sweep-curve \
 		leisaac-datagen leisaac-dagger leisaac-sweep-replay leisaac-sweep-render leisaac-sweep-camera-probe leisaac-sweep-inspect leisaac-convert leisaac-train leisaac-train-check leisaac-shell >/dev/null 2>&1
 
 shell-sim:
@@ -230,11 +239,24 @@ sweep-check:
 
 # Sweep タスクの評価。EVAL_POLICY=planner は計画器 (特権情報を使う)、remote は学習したポリシー (推論サーバを先に起動する)
 sweep-eval: $(if $(filter remote,$(EVAL_POLICY)),policy-up)
-	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --task=$(SWEEP_TASK) --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) --instructions=$(EVAL_INSTRUCTIONS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(EVAL_TIME_LIMIT),--time_limit=$(EVAL_TIME_LIMIT)) $(if $(EVAL_VIA_OVERSHOOT),--via_overshoot=$(EVAL_VIA_OVERSHOOT)) $(if $(EVAL_RANDOMIZE),--randomize=$(EVAL_RANDOMIZE)) $(if $(EVAL_DISTURB),--disturb=$(EVAL_DISTURB)) --layout=$(EVAL_LAYOUT) $(if $(and $(DATAGEN_NOISE),$(filter planner,$(EVAL_POLICY))),--dart_noise=$(DATAGEN_NOISE)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
+	$(call SIM_RUN,leisaac-sweep-eval) /opt/tools/sweep_eval.py --task=$(SWEEP_TASK) --policy=$(EVAL_POLICY) --rounds=$(EVAL_ROUNDS) --instructions=$(EVAL_INSTRUCTIONS) $(if $(EVAL_SEED),--seed=$(EVAL_SEED)) $(if $(EVAL_TIME_LIMIT),--time_limit=$(EVAL_TIME_LIMIT)) $(if $(EVAL_VIA_OVERSHOOT),--via_overshoot=$(EVAL_VIA_OVERSHOOT)) $(if $(EVAL_RANDOMIZE),--randomize=$(EVAL_RANDOMIZE)) $(if $(EVAL_DISTURB),--disturb=$(EVAL_DISTURB)) --layout=$(EVAL_LAYOUT) $(if $(EVAL_OUT_DIR),--out_dir=/workspace/data/sweep/$(EVAL_OUT_DIR)) $(if $(OBSTACLE_MODES),--obstacle_modes=$(OBSTACLE_MODES)) $(if $(and $(DATAGEN_NOISE),$(filter planner,$(EVAL_POLICY))),--dart_noise=$(DATAGEN_NOISE)) $(if $(filter 1,$(EVAL_VIDEOS)),--videos) \
 		$(if $(filter remote,$(EVAL_POLICY)),--policy_host=$(POLICY_HOST) --policy_timeout_ms=$(POLICY_TIMEOUT_MS) --action_horizon=$(ACTION_HORIZON)) \
 		$(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
 # Sweep タスクの自動生成 (sweep_eval.py --record)。成功したエピソードだけを記録する。上書きも追記もしない。
+# 学習曲線。TRAIN_NAME のチェックポイントを同じ EVAL_SEED で順に評価し (1 つずつ推論サーバを立て直す)、表にする。
+# 結果は data/sweep/curve/<TRAIN_NAME>/<EVAL_SEED>-<step>/ と curve.json。既にある評価は飛ばす (途中から続けられる)
+sweep-curve:
+	@test -n "$(CURVE_CHECKPOINTS)" || { echo "[エラー] CURVE_CHECKPOINTS=\"<step> ...\" を指定してください"; exit 1; }
+	@test -n "$(EVAL_SEED)" || { echo "[エラー] EVAL_SEED を指定してください (チェックポイントの間で配置をそろえる)"; exit 1; }
+	@for c in $(CURVE_CHECKPOINTS); do \
+		out=curve/$(TRAIN_NAME)/$(EVAL_SEED)-$$c; \
+		if [ -f data/sweep/$$out/summary.json ]; then echo "[飛ばす] data/sweep/$$out は評価済み"; continue; fi; \
+		$(MAKE) policy-down >/dev/null 2>&1; \
+		$(MAKE) sweep-eval EVAL_POLICY=remote TRAIN_CHECKPOINT=$$c EVAL_OUT_DIR=$$out || exit 1; \
+	done; $(MAKE) policy-down >/dev/null 2>&1
+	$(call TRAIN_RUN,leisaac-sweep-curve) /opt/tools/sweep_curve.py /workspace/data/sweep/curve/$(TRAIN_NAME) --out=/workspace/data/sweep/curve/$(TRAIN_NAME)/curve.json
+
 # ラウンドごとのログは data/datasets/$(DATASET).datagen/ に残す
 datagen:
 	@if [ -e "$(DATASET_PATH)" ]; then \
@@ -242,7 +264,7 @@ datagen:
 	fi
 	@mkdir -p $(dir $(SIM_RECORD)) && printf 'SIM_DEVICE=%s\nTEX_BUDGET=%s\n' "$(SIM_DEVICE)" "$(TEX_BUDGET)" > $(SIM_RECORD)
 	$(call SIM_RUN,leisaac-datagen) /opt/tools/sweep_eval.py --task=$(SWEEP_TASK) --policy=planner --record --dataset_file=$(DATASET_FILE) \
-		--num_demos=$(NUM) $(if $(DATAGEN_SEED),--seed=$(DATAGEN_SEED)) $(if $(DATAGEN_DISTURB),--disturb=$(DATAGEN_DISTURB)) $(if $(DATAGEN_NOISE),--dart_noise=$(DATAGEN_NOISE)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
+		--num_demos=$(NUM) $(if $(DATAGEN_SEED),--seed=$(DATAGEN_SEED)) $(if $(DATAGEN_DISTURB),--disturb=$(DATAGEN_DISTURB)) $(if $(DATAGEN_NOISE),--dart_noise=$(DATAGEN_NOISE)) $(if $(OBSTACLE_MODES),--obstacle_modes=$(OBSTACLE_MODES)) $(SIM_ARGS) --enable_cameras $(if $(filter 1,$(HEADLESS)),--headless)
 
 # DAgger のデータ。学習したポリシー (推論サーバ) で動かし、各フレームの計画器の action を正解として、すべてのラウンドを記録する
 # DAGGER_HANDOVER=T0,T1 では引き継ぎ型 (T0〜T1 秒にポリシーから計画器に引き継ぎ、計画器が成功したものを NUM 個集める)
@@ -305,7 +327,7 @@ train:
 		echo "[エラー] data/train/$(TRAIN_NAME) は既にあります。別の名前 (TRAIN_NAME=...) を指定してください"; exit 1; \
 	fi
 	$(call TRAIN_RUN,leisaac-train) /opt/tools/sweep_train.py --policy=$(TRAIN_POLICY) --dataset_root=/workspace/data/lerobot/$(DATASET) \
-		--output_dir=/workspace/data/train/$(TRAIN_NAME) $(if $(TRAIN_STEPS),--steps=$(TRAIN_STEPS)) $(if $(TRAIN_BATCH),--batch_size=$(TRAIN_BATCH)) $(if $(TRAIN_SEED),--seed=$(TRAIN_SEED)) $(if $(TRAIN_RESUME_FROM),--resume_from=/workspace/data/train/$(TRAIN_RESUME_FROM))
+		--output_dir=/workspace/data/train/$(TRAIN_NAME) $(if $(TRAIN_STEPS),--steps=$(TRAIN_STEPS)) $(if $(TRAIN_BATCH),--batch_size=$(TRAIN_BATCH)) $(if $(TRAIN_SEED),--seed=$(TRAIN_SEED)) $(if $(TRAIN_RESUME_FROM),--resume_from=/workspace/data/train/$(TRAIN_RESUME_FROM)) $(if $(TRAIN_SAVE_FREQ),--save_freq=$(TRAIN_SAVE_FREQ))
 
 # 比較するポリシーの通し確認。短い学習、学習と推論の入力の照合 (policy_io_check.py)、1 ラウンドの短い評価を順に行う。
 # 出力は data/train/smoke-<policy>-<日時>/ と data/sweep/eval/ に残る

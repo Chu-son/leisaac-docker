@@ -497,7 +497,8 @@ make import-policy FILE=~/Downloads/xxx.tar TRAIN_NAME=sweep_floor-smolvla   # C
 - lerobot 0.4.2 の `lerobot-train` を呼ぶ薄いラッパーです。Docker の外（Colab）でも、train の環境（`docker/envs/train` の lock）があれば同じように動きます。
 - ポリシーごとの既定（`PRESETS`）に、共通の設定（ローカルのデータセット、Hub に上げない、wandb を使わない、チェックポイントは steps の 1/5 ごと）を足して実行します。`-- ` の後ろは、そのまま lerobot-train に渡します。
 - 出力先は `data/train/<TRAIN_NAME>/`（lerobot の output_dir。`checkpoints/<step>/pretrained_model/` と `checkpoints/last`）。既にあれば止めます（上書きしない）。
-- 続きから学習するときは `TRAIN_RESUME_FROM=<学習>/checkpoints/<step>` を与えます。チェックポイントを新しい `TRAIN_NAME` に写し、lerobot の `--resume` で `TRAIN_STEPS` まで学習します。optimizer と乱数の状態も戻ります。ポリシー、データセット、batch はチェックポイントのものを使い、元の学習は変えません。ACT の既定の学習率は一定なので、最初から長く学習したのとほぼ同じになります。学習率を下げていくポリシー（SmolVLA など）は、計画が最初の steps で決まっているので、続きの学習は同じにはなりません。実行したコマンドと結果は `sweep_train.json` に残ります。`data/policies/` は make assets で取得するポリシーの場所なので、学習の出力は分けています。
+- 続きから学習するときは `TRAIN_RESUME_FROM=<学習>/checkpoints/<step>` を与えます。チェックポイントを新しい `TRAIN_NAME` に写し、lerobot の `--resume` で `TRAIN_STEPS` まで学習します。optimizer と乱数の状態も戻ります。ポリシー、データセット、batch はチェックポイントのものを使い、元の学習は変えません。ACT の既定の学習率は一定なので、最初から長く学習したのとほぼ同じになります。学習率を下げていくポリシー（SmolVLA など）は、計画が最初の steps で決まっているので、続きの学習は同じにはなりません。
+- チェックポイントの間隔は `TRAIN_SAVE_FREQ`（空なら steps の 1/5。続きからの学習では、追加の分の 1/2）。学習曲線を描くときは、評価したい step に合わせます。実行したコマンドと結果は `sweep_train.json` に残ります。`data/policies/` は make assets で取得するポリシーの場所なので、学習の出力は分けています。
 
 | ポリシー | 始め方 | 既定の steps / batch | 注意 |
 |---|---|---|---|
@@ -542,9 +543,15 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 1. ローカル: `make colab-data DATASET=sweep_floor` → `data/colab/sweep_floor.tar` をブラウザで Drive の `MyDrive/leisaac/` に上げる。学習に使う commit を push しておく
 2. Colab: ランタイムを GPU（L4 か A100）にし、最初のセルの設定（`COMMIT`、`TRAIN_POLICY`、`TRAIN_STEPS` など）を書き換えて、上から順に実行する。Drive のマウントは許可画面で承認する
 3. ノートブックが `MyDrive/leisaac/<TRAIN_NAME>.tar` を作る → ブラウザでダウンロード → `make import-policy FILE=<tar> TRAIN_NAME=<TRAIN_NAME>`
+4. 接続が切れたら、同じ設定のまま上から実行し直す。Drive に写した最後のチェックポイントから続ける
 
 - 最初に、GPU（compute capability 8.0 以上。T4 は flash-attn と bf16 が使えないので止める）、ドライバ、torch の CUDA、flash-attn の kernel を確かめます（`ENV OK`）。cu128 の torch は、ドライバが 570 より古くても CUDA の互換で動く見込みなので、ドライバの版では止めず、実際に kernel が動くかで判断します。
-- 出力は Colab のローカルディスク（`/content/leisaac/`）に書き、最後に tar にして Drive に保存します。既定では最後のチェックポイントだけを入れます（`KEEP_ALL_CHECKPOINTS = True` ですべて）。tar には `colab.json`（使った commit、GPU、ドライバ）も入ります。学習の途中でセッションが切れると、結果は残りません（長い学習で問題になれば、P6e / P6f で途中の保存を考える）。
+- 出力は Colab のローカルディスク（`/content/leisaac/`）に書き、チェックポイントができるたびに（2 分ごとに確かめる）Drive の `MyDrive/leisaac/train/<TRAIN_NAME>/` に写します（2026-11-12 から）。
+  - Drive はシンボリックリンクを置けないので、lerobot の出力先を Drive にはしません（`checkpoints/last` が作れない）。
+  - 最新でないチェックポイントの学習の状態（`training_state`。optimizer などで、再開にだけ使う）は Drive から消します。SmolVLA のチェックポイントは 1 つ約 1.3GB（重み 0.87GB）。
+  - 切断の後に上から実行し直すと、Drive の最後のチェックポイントをローカルに戻し、`sweep_train.py --resume` で最初に決めた steps まで続けます。学習率の計画も最初の設定のままなので、止まらずに学習したのと同じになります。
+  - 最後に、Drive のチェックポイントを tar にします。既定ではすべて入れます（学習曲線を描くため。`KEEP_ALL_CHECKPOINTS = False` で最後だけ）。tar には `colab.json`（使った commit、GPU、ドライバ、再開した step）も入ります。
+- 設定の `TRAIN_SEED`、`SAVE_FREQ`、`EXTRA_ARGS`（lerobot-train にそのまま渡す引数）は、ローカルの `make train` と同じ意味です。SmolVLA を既定より長く学習するときは、学習率を下げる期間を steps に合わせます（`EXTRA_ARGS = ["--policy.scheduler_decay_steps=<steps>"]`。既定は 30,000 step で、それより長く学習すると、残りは最小の学習率 2.5e-6 のままになる）。
 - セルは `!` を使わない普通の Python なので、Drive のマウント以外は Colab の外でも実行できます。
 
 ### 結果（2026-10-30、P6b）
@@ -572,6 +579,21 @@ make policy-smoke TRAIN_POLICY=diffusion DATASET=sweep_obst200v2 ACTION_HORIZON=
 - 過去の観測は、評価の側（`RemotePolicy`）が毎フレーム受け取って、直近の `n_obs_steps` 枚を送ります。学習は連続した 30 fps のフレームを見ているので、chunk の区切りごとの観測では合いません。ラウンドの最初は、足りない分を最初のフレームで埋めます。`n_obs_steps` が 1 のポリシーの通信は、改修の前と同じです。
 - 推論サーバは、`ping` で `n_obs_steps` と、一度に返せる action の数 `max_horizon` を返します。`ACTION_HORIZON` が `max_horizon` を超えていると、評価は始める前に止まります。
 - 推論で乱数を使うポリシーのために、評価はラウンドごとのシードを `reset` で渡します。
+
+## 学習曲線（`make sweep-curve`、`tools/sweep_curve.py`）
+
+学習の量を決めるために、1 つの学習のチェックポイントを同じ配置で順に評価し、表にします（2026-11-12 から）。
+
+```bash
+make sweep-curve TRAIN_NAME=sweep_obst400v2-act-600k CURVE_CHECKPOINTS="400000 600000" \
+    SWEEP_TASK=LeIsaac-LeKiwi-Sweep-Obstacle-v0 EVAL_SEED=20261110 EVAL_ROUNDS=30 EVAL_TIME_LIMIT=150
+```
+
+- 結果は `data/sweep/curve/<TRAIN_NAME>/<EVAL_SEED>-<step>/`（中身は sweep-eval と同じ）と、表の `curve.json`。評価済みのものは飛ばすので、止めても続きから実行できます。
+- チェックポイントごとに推論サーバを立て直します。
+- 表には、制限時間の中の成功と、`--within`（既定 90 秒）以内の成功を出します。ラウンドは成功した時点で終わるので、制限時間を延ばした評価からも、既定の 90 秒での成功を数えられます。障害物のタスクは、箱の置き方の型ごとにも出します。
+- 学習のシード違いなど、複数の学習を並べると、チェックポイントごとの合計も出します（`python3 tools/sweep_curve.py data/sweep/curve/<学習 1> data/sweep/curve/<学習 2> ...`。標準ライブラリだけなので、ホストでも動く）。
+- 障害物のタスクの箱の置き方は `OBSTACLE_MODES=between`（または `side`）で絞れます。sweep-eval と datagen の両方に効きます。
 
 ## 学習したポリシーの評価（`tools/policy_server.py`、`make sweep-eval EVAL_POLICY=remote`）
 
