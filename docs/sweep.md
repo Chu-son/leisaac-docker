@@ -592,7 +592,7 @@ make sweep-curve TRAIN_NAME=sweep_obst400v2-act-600k CURVE_CHECKPOINTS="400000 6
 - 結果は `data/sweep/curve/<TRAIN_NAME>/<EVAL_SEED>-<step>/`（中身は sweep-eval と同じ）と、表の `curve.json`。評価済みのものは飛ばすので、止めても続きから実行できます。
 - チェックポイントごとに推論サーバを立て直します。
 - 表には、制限時間の中の成功と、`--within`（既定 90 秒）以内の成功を出します。ラウンドは成功した時点で終わるので、制限時間を延ばした評価からも、既定の 90 秒での成功を数えられます。障害物のタスクは、箱の置き方の型ごとにも出します。
-- 学習のシード違いなど、複数の学習を並べると、チェックポイントごとの合計も出します（`python3 tools/sweep_curve.py data/sweep/curve/<学習 1> data/sweep/curve/<学習 2> ...`。標準ライブラリだけなので、ホストでも動く）。
+- 学習のシード違いなど、複数の学習を並べると、チェックポイントごとの合計も出します。合計は、ポリシーの種類と手本（`train_config.json` の `dataset.root`）が同じ学習どうしでだけ取ります（`python3 tools/sweep_curve.py data/sweep/curve/<学習 1> data/sweep/curve/<学習 2> ...`。標準ライブラリだけなので、ホストでも動く）。
 - 障害物のタスクの箱の置き方は `OBSTACLE_MODES=between`（または `side`）で絞れます。sweep-eval と datagen の両方に効きます。
 
 ## 学習したポリシーの評価（`tools/policy_server.py`、`make sweep-eval EVAL_POLICY=remote`）
