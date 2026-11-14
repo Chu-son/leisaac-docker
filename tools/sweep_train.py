@@ -4,6 +4,9 @@ Docker の外 (Colab。notebooks/train_colab.ipynb) でも、train の環境 (do
     python /opt/tools/sweep_train.py --policy act --dataset_root /workspace/data/lerobot/sweep_floor --output_dir /workspace/data/train/sweep_floor-act
 - ポリシーごとの既定 (PRESETS) に、共通の設定 (ローカルのデータセット、Hub に上げない、wandb を使わない) を足して lerobot-train を実行する
 - --steps と --batch_size で既定を変えられる。-- の後ろは、そのまま lerobot-train に渡す (例: -- --policy.chunk_size=50)
+- 学習率を下げていくポリシー (SmolVLA) は、steps が既定の期間 (30,000) より長いときだけ、下げる期間を steps に合わせる。
+  短いときは lerobot が自動で縮めるので変えない (これまでの学習と同じ)。-- の後ろで scheduler_decay_steps を与えたらそれを使う。
+  --resume_from で延ばす学習は、チェックポイントの計画のまま
 - output_dir が既にあれば止める (lerobot-train も止める)。実行したコマンドと結果を output_dir の sweep_train.json に残す
 - --resume_from に学習済みのチェックポイント (<学習>/checkpoints/<step>) を与えると、それを新しい output_dir に写し、
   その続きから --steps まで学習する (lerobot の --resume。optimizer と乱数の状態も戻す)。元の学習は変えない。
@@ -25,7 +28,9 @@ import time
 PRESETS = {
     "act": {"type": "act", "steps": 100_000, "batch_size": 8},
     # 事前学習時のカメラは camera1〜3。使わない camera3 は飛ばされる (empty_cameras=0)
-    "smolvla": {"pretrained": "lerobot/smolvla_base", "steps": 20_000, "batch_size": 64,
+    # decay_steps は学習率を下げる期間の既定 (lerobot の scheduler_decay_steps)。steps がこれより長いときだけ、steps に合わせる
+    # (短いときは lerobot が自動で縮める。長いと、残りを最小の学習率のまま学習してしまう)
+    "smolvla": {"pretrained": "lerobot/smolvla_base", "steps": 20_000, "batch_size": 64, "decay_steps": 30_000,
                 "rename": {"observation.images.front": "observation.images.camera1",
                            "observation.images.wrist": "observation.images.camera2"}},
     # 基盤モデルは nvidia/GR00T-N1.5-3B。既定では LLM と視覚エンコーダを凍結し、projector と action head を学習する
@@ -117,10 +122,14 @@ elif args.resume_from:
         *args.extra,
     ]
 else:
+    decay = []
+    if steps > preset.get("decay_steps", steps) and not any("scheduler_decay_steps" in a for a in args.extra):
+        decay = [f"--policy.scheduler_decay_steps={steps}"]
     cmd = [
         sys.executable, "-m", "lerobot.scripts.lerobot_train",
         *policy_args(preset, args.dataset_root),
         *preset.get("args", []),
+        *decay,
         f"--dataset.repo_id=local/{os.path.basename(os.path.normpath(args.dataset_root))}",
         f"--dataset.root={args.dataset_root}",
         f"--output_dir={args.output_dir}",
