@@ -551,6 +551,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
   - 最新でないチェックポイントの学習の状態（`training_state`。optimizer などで、再開にだけ使う）は Drive から消します。SmolVLA のチェックポイントは 1 つ約 1.3GB（重み 0.87GB）。
   - 切断の後に上から実行し直すと、Drive の最後のチェックポイントをローカルに戻し、`sweep_train.py --resume` で最初に決めた steps まで続けます。学習率の計画も最初の設定のままなので、止まらずに学習したのと同じになります。
   - 最後に、Drive のチェックポイントを tar にします。既定ではすべて入れます（学習曲線を描くため。`KEEP_ALL_CHECKPOINTS = False` で最後だけ）。tar には `colab.json`（使った commit、GPU、ドライバ、再開した step）も入ります。
+  - tar は Python の tarfile で書きます（2026-11-14 から）。GNU tar は、Drive のファイルの時刻が読む間に変わると、終了コード 1（読む間に変わった）で止まるためです（A100 での短い試しで起きた）。
 - 設定の `TRAIN_SEED`、`SAVE_FREQ`、`EXTRA_ARGS`（lerobot-train にそのまま渡す引数）は、ローカルの `make train` と同じ意味です。SmolVLA の学習率を下げる期間は、`sweep_train.py` が steps に合わせます（2026-11-14 から。下の「学習率を下げる期間」）。
 - セルは `!` を使わない普通の Python なので、Drive のマウント以外は Colab の外でも実行できます。
 
