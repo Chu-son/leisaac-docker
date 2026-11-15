@@ -548,6 +548,7 @@ SmolVLA と GR00T は、Colab Pro（L4 か A100）で学習します。ノート
 - 最初に、GPU（compute capability 8.0 以上。T4 は flash-attn と bf16 が使えないので止める）、ドライバ、torch の CUDA、flash-attn の kernel を確かめます（`ENV OK`）。cu128 の torch は、ドライバが 570 より古くても CUDA の互換で動く見込みなので、ドライバの版では止めず、実際に kernel が動くかで判断します。
 - 出力は Colab のローカルディスク（`/content/leisaac/`）に書き、チェックポイントができるたびに（2 分ごとに確かめる）Drive の `MyDrive/leisaac/train/<TRAIN_NAME>/` に写します（2026-11-12 から）。
   - Drive はシンボリックリンクを置けないので、lerobot の出力先を Drive にはしません（`checkpoints/last` が作れない）。
+  - `SAVE_FREQ` を短くすると、切れたときに失う学習が減ります。`DRIVE_KEEP_EVERY` を与えると、Drive にはその間隔に当たるものと最新のものだけを残します（2026-11-15 から。例: `SAVE_FREQ = 5000`、`DRIVE_KEEP_EVERY = 25000`）。続きからの学習でも `SAVE_FREQ` を変えられます（`--save_freq` を lerobot に渡す。学習の結果には影響しない）。Colab のディスクからも、Drive に写した古いものを消します。
   - 最新でないチェックポイントの学習の状態（`training_state`。optimizer などで、再開にだけ使う）は Drive から消します。SmolVLA のチェックポイントは 1 つ約 1.3GB（重み 0.87GB）。
   - 切断の後に上から実行し直すと、Drive の最後のチェックポイントをローカルに戻し、`sweep_train.py --resume` で最初に決めた steps まで続けます。学習率の計画も最初の設定のままなので、止まらずに学習したのと同じになります。
   - 最後に、Drive のチェックポイントを tar にします。既定ではすべて入れます（学習曲線を描くため。`KEEP_ALL_CHECKPOINTS = False` で最後だけ）。tar には `colab.json`（使った commit、GPU、ドライバ、再開した step）も入ります。
